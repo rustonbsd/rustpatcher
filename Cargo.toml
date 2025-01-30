@@ -1,0 +1,45 @@
+[package]
+name = "rustpatcher"
+version = "0.1.0"
+edition = "2021"
+authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
+description = "p2p patching system"
+license = "MIT"
+repository = "https://github.com/rustonbsd/rustpatcher"
+readme = "README.md"
+keywords = ["networking"]
+categories = ["network-programming"]
+
+[dependencies]
+iroh = "0.31"
+tokio ={ version="1",features = ["full"] }
+anyhow = "1"
+rand = "0.8.0"
+serde = "1"
+serde_json = "1"
+serde_bytes = "0.11"
+bytes = { version = "1.7", features = ["serde"] }
+ed25519-dalek = { version = "2.0.0", features = ["serde", "rand_core"] }
+postcard = { version = "1", default-features = false, features = ["alloc", "use-std", "experimental-derive"] }
+futures-lite = "2"
+z32 = "1"
+sha2 = "0.10"
+pkarr = "2"
+clap = { version = "4.4.8", features = ["derive"] }
+
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[features]
+default = []
+
+[profile.dev]
+opt-level = 0
+features = []
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+features = []
