@@ -1,10 +1,21 @@
+use std::io::SeekFrom;
+
 use anyhow::bail;
 use iroh::Endpoint;
 use pkarr::dns::{self, Packet};
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::{fs::{create_dir, File}, io::{AsyncReadExt, AsyncWriteExt}};
+use tokio::{
+    fs::{create_dir, File, OpenOptions},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+};
+
+pub const PUBLISHER_TRUSTED_KEY_NAME: &str = "trusted_key";
+pub const PUBLISHER_SIGNING_KEY_NAME: &str = "publisher_signing_key";
 
 pub const PATCHER_DIR: &str = ".patcher";
+pub const SECRET_KEY_NAME: &str = "trusted_key";
+pub const LATEST_VERSION_NAME: &str = "latest_version";
+pub const LAST_REPLY_ID_NAME: &str = "last_reply_id";
 
 pub async fn wait_for_relay(endpoint: &Endpoint) -> anyhow::Result<()> {
     while endpoint.home_relay().get().is_err() {
@@ -44,35 +55,38 @@ pub fn decode_rdata<T: DeserializeOwned + Clone>(
     }
 }
 
-pub trait Storage {
-    async fn from_file<T: DeserializeOwned + Clone>(
-        file_name: &str,
-    ) -> anyhow::Result<T>;
-    async fn to_file<T: Serialize + Clone> (&self,file_name: &str) -> anyhow::Result<()>;
+pub trait Storage<T: Serialize + DeserializeOwned + Clone> {
+    async fn from_file(file_name: &str) -> anyhow::Result<T>;
+    async fn to_file(self, file_name: &str) -> anyhow::Result<()>;
 }
-impl<S: Serialize + DeserializeOwned + Clone> Storage for S {
-
-    async fn from_file<T: DeserializeOwned + Clone>(
-        file_name: &str,
-    ) -> anyhow::Result<T> {
+impl<S: Serialize + DeserializeOwned + Clone> Storage<S> for S {
+    async fn from_file(file_name: &str) -> anyhow::Result<S> {
         create_check_patcher_dir().await;
-        
+
         let mut file = File::open(format!("{PATCHER_DIR}/{file_name}")).await?;
         let mut buf = vec![];
         file.read_to_end(&mut buf).await?;
-    
-        let t: T = serde_json::from_slice(&buf.as_slice())?;
-    
+
+        let t: S = serde_json::from_slice(&buf.as_slice())?;
+
         Ok(t)
     }
-    
-    async fn to_file<T: Serialize + Clone> (self: &S,file_name: &str) -> anyhow::Result<()> {
+
+    async fn to_file(self: S, file_name: &str) -> anyhow::Result<()> {
         create_check_patcher_dir().await;
-    
-        let mut file = File::open(format!("{PATCHER_DIR}/{file_name}")).await?;
-        let buf = serde_json::to_vec(self)?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(format!("{PATCHER_DIR}/{file_name}"))
+            .await?;
+
+        file.seek(SeekFrom::Start(0)).await?;
+        file.set_len(0).await?;
+
+        let buf = serde_json::to_vec(&self)?;
         file.write_all(buf.as_slice()).await?;
-    
+
         Ok(())
     }
 }
@@ -84,8 +98,12 @@ pub async fn create_check_patcher_dir() {
             if !meta.is_dir() {
                 create = true;
             }
-        }else {create = true;}
-    } else {create = true;}
+        } else {
+            create = true;
+        }
+    } else {
+        create = true;
+    }
 
     if create {
         let _ = create_dir(PATCHER_DIR).await;

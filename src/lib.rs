@@ -1,5 +1,5 @@
-mod data;
-mod utils;
+pub mod data;
+pub mod utils;
 
 use std::{future::Future, pin::Pin, str::FromStr, sync::Arc, time::Instant};
 
@@ -20,7 +20,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::Mutex,
 };
-use utils::Storage;
+use utils::{Storage, LAST_REPLY_ID_NAME, LATEST_VERSION_NAME, SECRET_KEY_NAME};
 
 use crate::utils::wait_for_relay;
 
@@ -74,7 +74,7 @@ impl Builder {
         }
 
         if self.load_secret_key_from_file {
-            self.secret_key = SecretKey::from_file("keys").await?;
+            self.secret_key = SecretKey::from_file(SECRET_KEY_NAME).await?.to_bytes();
         }
 
         // Iroh setup
@@ -87,7 +87,7 @@ impl Builder {
             .await?;
 
         let patcher = if self.load_latest_version_from_file {
-            let latest_version = VersionTracker::from_file("version_tracker").await;
+            let latest_version = VersionTracker::from_file(LATEST_VERSION_NAME).await;
             if latest_version.is_ok() {
                 Patcher::with_latest_version(&endpoint, latest_version.unwrap())
             } else {
@@ -156,7 +156,7 @@ impl Patcher {
 
         // Pkarr
         tokio::spawn({
-            let me = self.clone();
+            let mut me = self.clone();
             async move {
                 // - Publish if latest version if known
                 // - Check trusted_key record for updates
@@ -171,10 +171,29 @@ impl Patcher {
 
                         // Check trusted_key record
                         if let Ok((trusted_version_info, trusted_node_ids)) =
-                            me.resolve_pkarr(&self.trusted_key).await
+                            me.resolve_pkarr(&me.trusted_key).await
                         {
+                            {   // Add all current node ids
+                                let mut lt = me.inner.latest_version.lock().await;
+                                for node_id in trusted_node_ids.clone() {
+                                    lt.add_node_id(&node_id);
+                                }
+                            }
+
                             if trusted_version_info.version > version_info.version {
                                 // Update process
+                                for node_id in trusted_node_ids.clone() {
+                                    match me.try_update(iroh::PublicKey::from_bytes(&node_id).unwrap()).await {
+                                        Ok(_) => {
+                                            println!("New version downloaded: {:?}",me.inner.latest_version.lock().await);
+                                            break
+                                        },
+                                        Err(_) => {
+                                            let mut lt = me.inner.latest_version.lock().await;
+                                            lt.rm_node_id(&node_id);
+                                        },
+                                    }
+                                }
                             }
                         }
                     }
@@ -345,7 +364,17 @@ impl PatcherPkarr for Patcher {
 
         // Set reply id to unix time
         let vi = lt.version_info().unwrap();
-        let mut packet = dns::Packet::new_reply(rand::rngs::OsRng.gen::<u16>());
+        let mut last_reply_id: LastReplyId = LastReplyId::from_file(LAST_REPLY_ID_NAME).await.unwrap_or(LastReplyId(0));
+        let mut packet = dns::Packet::new_reply(last_reply_id.0);
+        
+        // Not sure if rap around will cause an error so to be safe
+        last_reply_id.0 = if last_reply_id.0 >= u16::MAX -1 {
+            0
+        } else {
+            last_reply_id.0 + 1
+        };
+        let _ = last_reply_id.to_file("last_reply_id").await;
+
 
         // Version
         let version = serde_json::to_string(&vi.version)?;
@@ -408,40 +437,8 @@ impl PatcherPkarr for Patcher {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct Topic([u8; 32]);
-
-impl Topic {
-    pub fn new(topic: [u8; 32]) -> Self {
-        Self(topic)
-    }
-
-    pub fn from_passphrase(phrase: &str) -> Self {
-        Self(Self::hash(phrase))
-    }
-
-    fn hash(s: &str) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(s);
-        let mut buf = [0u8; 32];
-        buf.copy_from_slice(&hasher.finalize()[..32]);
-        buf
-    }
-
-    pub fn to_string(&self) -> String {
-        z32::encode(&self.0)
-    }
-
-    pub fn to_secret_key(&self) -> SecretKey {
-        SecretKey::from_bytes(&self.0.clone())
-    }
-}
-
-impl Default for Topic {
-    fn default() -> Self {
-        Self::from_passphrase("password")
-    }
-}
+#[derive(Debug,Clone,Serialize,Deserialize)]
+struct LastReplyId(u16);
 
 impl ProtocolHandler for Patcher {
     fn accept(

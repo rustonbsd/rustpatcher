@@ -4,16 +4,20 @@ use bytes::Bytes;
 use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
 use serde::{Deserialize, Serialize};
+use serde_json::to_vec;
 use tokio::sync::Mutex;
 
-
-#[derive(Debug, Clone, Serialize, Deserialize,PartialOrd,PartialEq,Eq)]
-pub struct Version(i32,i32,i32);
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq)]
+pub struct Version(pub i32, pub i32, pub i32);
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let self_sum: i128 = ((i32::MAX as i128).pow(2) * self.0 as i128) + ((i32::MAX as i128).pow(1) * self.1 as i128) + self.2 as i128;
-        let other_sum: i128 = ((i32::MAX as i128).pow(2) * other.0 as i128) + ((i32::MAX as i128).pow(1) * other.1 as i128) + other.2 as i128;
+        let self_sum: i128 = ((i32::MAX as i128).pow(2) * self.0 as i128)
+            + ((i32::MAX as i128).pow(1) * self.1 as i128)
+            + self.2 as i128;
+        let other_sum: i128 = ((i32::MAX as i128).pow(2) * other.0 as i128)
+            + ((i32::MAX as i128).pow(1) * other.1 as i128)
+            + other.2 as i128;
         self_sum.cmp(&other_sum)
     }
 }
@@ -35,6 +39,7 @@ pub struct VersionTracker {
     version_info: Option<VersionInfo>,
     #[serde(with = "serde_z32_vec_array")]
     node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>,
+    #[serde(with = "serde_z32_bytes_option")]
     data: Option<Bytes>,
 }
 
@@ -43,7 +48,7 @@ impl VersionTracker {
         Self {
             version_info: None,
             node_ids: vec![],
-            data: None
+            data: None,
         }
     }
 
@@ -59,7 +64,11 @@ impl VersionTracker {
         self.node_ids.clone()
     }
 
-    pub fn load(version_info: &VersionInfo, data: &Bytes, node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>) -> anyhow::Result<Self> {
+    pub fn load(
+        version_info: &VersionInfo,
+        data: &Bytes,
+        node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>,
+    ) -> anyhow::Result<Self> {
         Self::verify_data(version_info, data)?;
 
         Ok(Self {
@@ -70,7 +79,12 @@ impl VersionTracker {
     }
 
     // Update version and reset known host ids
-    pub fn update_version(self: &mut Self, version_info: &VersionInfo, data: &Bytes, node_ids: Option<Vec<[u8; PUBLIC_KEY_LENGTH]>>) -> anyhow::Result<()> {
+    pub fn update_version(
+        self: &mut Self,
+        version_info: &VersionInfo,
+        data: &Bytes,
+        node_ids: Option<Vec<[u8; PUBLIC_KEY_LENGTH]>>,
+    ) -> anyhow::Result<()> {
         Self::verify_data(version_info, data)?;
 
         self.version_info = Some(version_info.clone());
@@ -80,11 +94,24 @@ impl VersionTracker {
         Ok(())
     }
 
-    pub fn add_node_id(self: &mut Self,node_id: &[u8; PUBLIC_KEY_LENGTH]) {
-        self.node_ids.push(node_id.clone());
+    pub fn add_node_id(self: &mut Self, node_id: &[u8; PUBLIC_KEY_LENGTH]) {
+        if !self.node_ids.contains(node_id) {
+            self.node_ids.push(node_id.clone());
+        }
     }
 
-    pub fn verify_data(version_info: &VersionInfo, data: &Bytes) -> anyhow::Result<()>{
+    pub fn rm_node_id(self: &mut Self, node_id: &[u8; PUBLIC_KEY_LENGTH]) {
+        if self.node_ids.contains(node_id) {
+            let len = self.node_ids.len();
+            for i in 1..len + 1 {
+                if self.node_ids[len - i].eq(node_id) {
+                    self.node_ids.remove(len - i);
+                }
+            }
+        }
+    }
+
+    pub fn verify_data(version_info: &VersionInfo, data: &Bytes) -> anyhow::Result<()> {
         let pub_key = PublicKey::from_bytes(&version_info.trusted_key)?;
         let sig = version_info.signature;
 
@@ -98,7 +125,7 @@ impl VersionTracker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Protocol {
     Request,
-    Data(VersionInfo,Bytes),
+    Data(VersionInfo, Bytes),
     DataUnavailable,
     Done,
 }
@@ -127,7 +154,7 @@ pub mod serde_version {
     where
         S: Serializer,
     {
-        let version = format!("{}.{}.{}",version.0,version.1,version.2);
+        let version = format!("{}.{}.{}", version.0, version.1, version.2);
         serializer.serialize_str(&version)
     }
 
@@ -136,11 +163,14 @@ pub mod serde_version {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let version_nums = s.split(".").filter_map(|s| match s.parse::<i32>() {
-            Ok(n) => Some(n),
-            Err(_) => None,
-        }).collect::<Vec<i32>>();
-        
+        let version_nums = s
+            .split(".")
+            .filter_map(|s| match s.parse::<i32>() {
+                Ok(n) => Some(n),
+                Err(_) => None,
+            })
+            .collect::<Vec<i32>>();
+
         if !version_nums.len().eq(&3) {
             return Err(D::Error::custom("invalid version"));
         }
@@ -148,7 +178,6 @@ pub mod serde_version {
         Ok(Version(version_nums[0], version_nums[1], version_nums[2]))
     }
 }
-
 
 pub mod serde_z32_array {
     use serde::de::Error;
@@ -181,17 +210,74 @@ pub mod serde_z32_array {
     }
 }
 
+pub mod serde_z32_bytes {
+    use serde::de::Error;
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(bytes: &Bytes, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded = z32::encode(bytes);
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Bytes, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let bytes = z32::decode(s.as_bytes()).map_err(|e| D::Error::custom(e.to_string()))?;
+
+        Ok(bytes.into())
+    }
+}
+
+pub mod serde_z32_bytes_option {
+    use serde::de::Error;
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(bytes: &Option<Bytes>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded = if let Some(bytes) = bytes {
+            z32::encode(bytes)
+        } else {
+            "".to_string()
+        };
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Bytes>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.len() == 0 {
+            return Ok(None)
+        }
+        let bytes = z32::decode(s.as_bytes()).map_err(|e| D::Error::custom(e.to_string()))?;
+
+        Ok(Some(bytes.into()))
+    }
+}
+
 pub mod serde_z32_signature {
     use serde::de::Error;
     use serde::{Deserializer, Serializer};
 
     use super::*;
 
-    pub fn serialize<S>(bytes: &Signature, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(signature: &Signature, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let encoded = z32::encode(&bytes.to_bytes());
+        let encoded = z32::encode(&signature.to_bytes());
         serializer.serialize_str(&encoded)
     }
 
@@ -208,10 +294,9 @@ pub mod serde_z32_signature {
 
         let mut arr = [0u8; SIGNATURE_LENGTH];
         arr.copy_from_slice(&bytes);
-        
+
         Ok(Signature::from_bytes(&arr))
     }
-
 }
 
 pub mod serde_z32_vec_array {
@@ -234,9 +319,7 @@ pub mod serde_z32_vec_array {
         serializer.serialize_str(&encoded)
     }
 
-    pub fn deserialize<'de, D, const N: usize>(
-        deserializer: D,
-    ) -> Result<Vec<[u8; N]>, D::Error>
+    pub fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<Vec<[u8; N]>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -248,7 +331,7 @@ pub mod serde_z32_vec_array {
                     if !bytes.len().eq(&N) {
                         return None;
                     }
-                    
+
                     let mut arr = [0u8; N];
                     arr.copy_from_slice(&bytes);
                     Some(arr)
