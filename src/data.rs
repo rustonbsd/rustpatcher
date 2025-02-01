@@ -36,6 +36,8 @@ pub struct VersionInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionTracker {
+    #[serde(with = "serde_z32_array")]
+    trusted_key: [u8; PUBLIC_KEY_LENGTH],
     version_info: Option<VersionInfo>,
     #[serde(with = "serde_z32_vec_array")]
     node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>,
@@ -44,8 +46,9 @@ pub struct VersionTracker {
 }
 
 impl VersionTracker {
-    pub fn new() -> Self {
+    pub fn new(trusted_key: &[u8; PUBLIC_KEY_LENGTH]) -> Self {
         Self {
+            trusted_key: trusted_key.clone(),
             version_info: None,
             node_ids: vec![],
             data: None,
@@ -65,27 +68,29 @@ impl VersionTracker {
     }
 
     pub fn load(
+        trusted_key: &[u8; PUBLIC_KEY_LENGTH],
         version_info: &VersionInfo,
         data: &Bytes,
         node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>,
     ) -> anyhow::Result<Self> {
-        Self::verify_data(version_info, data)?;
+        Self::verify_data(trusted_key,version_info, data)?;
 
         Ok(Self {
+            trusted_key: trusted_key.clone(),
             version_info: Some(version_info.clone()),
             node_ids: node_ids,
             data: Some(data.clone()),
         })
     }
 
-    // Update version and reset known host ids
+    // Verify data signature, update version
     pub fn update_version(
         self: &mut Self,
         version_info: &VersionInfo,
         data: &Bytes,
         node_ids: Option<Vec<[u8; PUBLIC_KEY_LENGTH]>>,
     ) -> anyhow::Result<()> {
-        Self::verify_data(version_info, data)?;
+        Self::verify_data(&self.trusted_key,version_info, data)?;
 
         self.version_info = Some(version_info.clone());
         self.node_ids = node_ids.unwrap_or(vec![]);
@@ -111,8 +116,8 @@ impl VersionTracker {
         }
     }
 
-    pub fn verify_data(version_info: &VersionInfo, data: &Bytes) -> anyhow::Result<()> {
-        let pub_key = PublicKey::from_bytes(&version_info.trusted_key)?;
+    pub fn verify_data(trusted_key: &[u8; PUBLIC_KEY_LENGTH], version_info: &VersionInfo, data: &Bytes) -> anyhow::Result<()> {
+        let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
         match pub_key.verify(&data, &sig) {

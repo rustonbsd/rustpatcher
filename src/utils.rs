@@ -13,7 +13,7 @@ pub const PUBLISHER_TRUSTED_KEY_NAME: &str = "trusted_key";
 pub const PUBLISHER_SIGNING_KEY_NAME: &str = "publisher_signing_key";
 
 pub const PATCHER_DIR: &str = ".patcher";
-pub const SECRET_KEY_NAME: &str = "trusted_key";
+pub const SECRET_KEY_NAME: &str = "secret_key";
 pub const LATEST_VERSION_NAME: &str = "latest_version";
 pub const LAST_REPLY_ID_NAME: &str = "last_reply_id";
 

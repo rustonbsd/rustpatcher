@@ -89,12 +89,12 @@ impl Builder {
         let patcher = if self.load_latest_version_from_file {
             let latest_version = VersionTracker::from_file(LATEST_VERSION_NAME).await;
             if latest_version.is_ok() {
-                Patcher::with_latest_version(&endpoint, latest_version.unwrap())
+                Patcher::with_latest_version(&self.trusted_key.unwrap(), &endpoint, latest_version.unwrap())
             } else {
-                Patcher::with_endpoint(&endpoint)
+                Patcher::with_endpoint(&self.trusted_key.unwrap(),&endpoint)
             }
         } else {
-            Patcher::with_endpoint(&endpoint)
+            Patcher::with_endpoint(&self.trusted_key.unwrap(),&endpoint)
         };
 
         let _router = iroh::protocol::Router::builder(endpoint.clone())
@@ -106,21 +106,37 @@ impl Builder {
     }
 }
 
-impl Patcher {
-    pub const ALPN: &'static [u8] = b"iroh/patcher/1";
-    pub const MAX_MSG_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
+trait TPatcher: Sized {
+    fn with_endpoint(trusted_key: &[u8; PUBLIC_KEY_LENGTH],endpoint: &Endpoint) -> Self;
+    fn with_latest_version(trusted_key: &[u8; PUBLIC_KEY_LENGTH],endpoint: &Endpoint, latest_version: VersionTracker) -> Self;
+    async fn _spawn(self) -> Result<Self>;
+}
 
-    pub fn new() -> Builder {
+pub trait PubTPatcher: Sized {
+    const ALPN: &'static [u8] = b"iroh/patcher/1";
+    const MAX_MSG_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
+    fn new() -> Builder;
+    async fn spawn(self) -> Result<Self>;
+}
+
+impl PubTPatcher for Patcher {
+    fn new() -> Builder {
         Builder::new()
     }
 
-    fn with_endpoint(endpoint: &Endpoint) -> Self {
-        Self::with_latest_version(endpoint, VersionTracker::new())
+    async fn spawn(self) -> Result<Self> {
+        self._spawn().await
+    }
+}
+
+impl TPatcher for Patcher {
+    fn with_endpoint(trusted_key: &[u8; PUBLIC_KEY_LENGTH],endpoint: &Endpoint) -> Self {
+        Self::with_latest_version(trusted_key, endpoint, VersionTracker::new(trusted_key))
     }
 
-    fn with_latest_version(endpoint: &Endpoint, latest_version: VersionTracker) -> Self {
+    fn with_latest_version(trusted_key: &[u8; PUBLIC_KEY_LENGTH],endpoint: &Endpoint, latest_version: VersionTracker) -> Self {
         let me = Self {
-            trusted_key: endpoint.node_id().as_bytes().clone(),
+            trusted_key: trusted_key.clone(),
             inner: Inner {
                 endpoint: endpoint.clone(),
                 latest_version: Arc::new(Mutex::new(latest_version)),
@@ -130,8 +146,7 @@ impl Patcher {
         };
         me
     }
-
-    async fn spawn(self) -> Result<Self> {
+    async fn _spawn(self) -> Result<Self> {
         // Iroh
         tokio::spawn({
             let me2 = self.clone();
@@ -204,14 +219,14 @@ impl Patcher {
     }
 }
 
-trait PrivatePatcherIroh {
+trait TPatcherIroh: Sized {
     async fn send_msg(msg: Protocol, send: &mut SendStream) -> Result<()>;
     async fn recv_msg(recv: &mut RecvStream) -> Result<Protocol>;
     async fn accept_handler(&self, conn: Connecting) -> Result<()>;
     async fn try_update(self: &mut Self, node_id: NodeId) -> Result<()>;
 }
 
-impl PrivatePatcherIroh for Patcher {
+impl TPatcherIroh for Patcher {
     async fn send_msg(msg: Protocol, send: &mut SendStream) -> Result<()> {
         let encoded = postcard::to_stdvec(&msg)?;
         assert!(encoded.len() <= Self::MAX_MSG_SIZE_BYTES as usize);
@@ -233,6 +248,16 @@ impl PrivatePatcherIroh for Patcher {
     }
 
     async fn try_update(self: &mut Self, node_id: NodeId) -> Result<()> {
+
+        let (node_version_info,node_ids) = self.resolve_pkarr(node_id.as_bytes()).await?;
+        {
+            let me_version_info = self.inner.latest_version.lock().await.version_info().expect("version info not available in nodes pkarr record");
+            
+            if node_version_info.version <= me_version_info.version {
+                bail!("node version not newer")
+            }
+        }
+
         wait_for_relay(&self.inner.endpoint).await?;
 
         let conn = self
@@ -240,7 +265,6 @@ impl PrivatePatcherIroh for Patcher {
             .endpoint
             .connect(NodeAddr::new(node_id), Self::ALPN)
             .await?;
-        let remote_node_id = iroh::endpoint::get_remote_node_id(&conn)?;
 
         let (mut send, mut recv) = conn.open_bi().await?;
 
@@ -254,11 +278,14 @@ impl PrivatePatcherIroh for Patcher {
                 if latest_version_info.is_none()
                     || latest_version_info.unwrap().version < version_info.version
                 {
+                    // Signature checked in update_version
+                    // as low as possible
                     latest_vt.update_version(
                         &version_info,
                         &data,
-                        Some(vec![*remote_node_id.as_bytes()]),
+                        Some(node_ids),
                     )?;
+
                 }
                 drop(latest_vt);
             }
@@ -308,8 +335,7 @@ impl PrivatePatcherIroh for Patcher {
         Ok(())
     }
 }
-
-trait PatcherPkarr {
+trait TPatcherPkarr: Sized {
     fn resolve_pkarr(
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],
@@ -318,7 +344,7 @@ trait PatcherPkarr {
     fn publish_pkarr(&self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 }
 
-impl PatcherPkarr for Patcher {
+impl TPatcherPkarr for Patcher {
     async fn resolve_pkarr(
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],

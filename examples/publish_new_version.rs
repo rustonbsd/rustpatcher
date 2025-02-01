@@ -9,7 +9,7 @@ use tokio::{fs::File, io::AsyncReadExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let version = Version(0,0,1);
+    let version = Version(0,0,2);
     let file_path = "test.file";
     let mut file = File::open(file_path).await?;
     let mut buf = vec![];
@@ -33,12 +33,15 @@ async fn main() -> anyhow::Result<()> {
         if let Ok(secret_key) = SecretKey::from_file(SECRET_KEY_NAME).await {
             secret_key
         } else {
-            let mut csprng = OsRng;
-            let signing_key = *SigningKey::generate(&mut csprng).as_bytes();
+            let signing_key = *publisher_signing_key.as_bytes();
             signing_key.clone().to_file(SECRET_KEY_NAME).await?;
             signing_key
         }
     };
+
+    if !publisher_signing_key.as_bytes().eq(&node_secret_key) {
+        anyhow::bail!("secret key and publisher signing key don't match. not allowed for trusted node")
+    }
 
     let signature = publisher_signing_key.sign(&buf.as_slice());
     let hash = compute_hash(&buf);
@@ -50,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         signature,
         trusted_key,
     };
-    let version_tracker = VersionTracker::load(&version_info, &buf.clone().into(), vec![node_secret_key])?;
+    let version_tracker = VersionTracker::load(&trusted_key, &version_info, &buf.clone().into(), vec![node_secret_key])?;
     version_tracker.to_file(LATEST_VERSION_NAME).await?;
 
     Ok(())
