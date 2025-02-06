@@ -1,10 +1,9 @@
 pub mod data;
 pub mod utils;
 
-use std::{future::Future, pin::Pin, str::FromStr, sync::Arc, time::Instant};
+use std::{future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{bail, Result};
-use bytes::Bytes;
 use data::{Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH};
 use iroh::{
@@ -13,9 +12,7 @@ use iroh::{
     NodeAddr, NodeId, SecretKey,
 };
 use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
-use rand::{rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::Mutex,
@@ -36,8 +33,8 @@ impl Builder {
         Self {
             secret_key: SecretKey::generate(rand::rngs::OsRng).to_bytes(),
             trusted_key: None,
-            load_latest_version_from_file: false,
-            load_secret_key_from_file: false,
+            load_latest_version_from_file: true,
+            load_secret_key_from_file: true,
         }
     }
 
@@ -74,7 +71,9 @@ impl Builder {
         }
 
         if self.load_secret_key_from_file {
-            self.secret_key = SecretKey::from_file(SECRET_KEY_NAME).await?.to_bytes();
+            if let Ok(secret_key) = SecretKey::from_file(SECRET_KEY_NAME).await {
+                self.secret_key = secret_key.to_bytes();
+            }
         }
 
         // Iroh setup
@@ -116,7 +115,7 @@ pub trait PubTPatcher: Sized {
     const ALPN: &'static [u8] = b"iroh/patcher/1";
     const MAX_MSG_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
     fn new() -> Builder;
-    async fn spawn(self) -> Result<Self>;
+    fn spawn(self) -> impl std::future::Future<Output = Result<Self>> + Send;
 }
 
 impl PubTPatcher for Patcher {
@@ -147,6 +146,7 @@ impl TPatcher for Patcher {
         me
     }
     async fn _spawn(self) -> Result<Self> {
+        /*
         // Iroh
         tokio::spawn({
             let me2 = self.clone();
@@ -168,8 +168,12 @@ impl TPatcher for Patcher {
                 }
             }
         });
+        */
 
         // Pkarr
+        // - pub trust record of newest version | update dht version
+        // - pub own version if exists  | update own version from local dht version if dht version is newer
+        // TODO: rework below
         tokio::spawn({
             let mut me = self.clone();
             async move {
@@ -335,6 +339,7 @@ impl TPatcherIroh for Patcher {
         Ok(())
     }
 }
+
 trait TPatcherPkarr: Sized {
     fn resolve_pkarr(
         &self,

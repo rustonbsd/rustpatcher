@@ -56,10 +56,11 @@ pub fn decode_rdata<T: DeserializeOwned + Clone>(
 }
 
 pub trait Storage<T: Serialize + DeserializeOwned + Clone> {
-    async fn from_file(file_name: &str) -> anyhow::Result<T>;
-    async fn to_file(self, file_name: &str) -> anyhow::Result<()>;
+    fn from_file(file_name: &str) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
+    fn to_file(self, file_name: &str) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 }
-impl<S: Serialize + DeserializeOwned + Clone> Storage<S> for S {
+
+impl<S: Serialize + DeserializeOwned + Clone + Send> Storage<S> for S {
     async fn from_file(file_name: &str) -> anyhow::Result<S> {
         create_check_patcher_dir().await;
 

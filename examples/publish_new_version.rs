@@ -1,3 +1,5 @@
+use std::{io::Write, process::Command, str::FromStr};
+
 use ed25519_dalek::{ed25519::signature::SignerMut, SecretKey, SigningKey};
 use rand::rngs::OsRng;
 use rustpatcher::{
@@ -9,11 +11,13 @@ use tokio::{fs::File, io::AsyncReadExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let version = Version(0,0,2);
-    let file_path = "test.file";
+    let version = Version::from_str( env!("CARGO_PKG_VERSION"))?;
+    let file_path = "test.file"; //std::env::current_exe()?;
     let mut file = File::open(file_path).await?;
     let mut buf = vec![];
     file.read_to_end(&mut buf).await?;
+
+    println!("Version: {version:?}");
 
     let mut publisher_signing_key = {
         if let Ok(secret_key) = SecretKey::from_file(PUBLISHER_SIGNING_KEY_NAME).await {
@@ -56,7 +60,22 @@ async fn main() -> anyhow::Result<()> {
     let version_tracker = VersionTracker::load(&trusted_key, &version_info, &buf.clone().into(), vec![node_secret_key])?;
     version_tracker.to_file(LATEST_VERSION_NAME).await?;
 
-    Ok(())
+    let data = VersionTracker::from_file(LATEST_VERSION_NAME).await?.data().unwrap();
+    let mut temp_file = tempfile::NamedTempFile::new()?;
+    temp_file.write_all(&data)?;
+    let path = temp_file.path();
+
+    let rep = self_replace::self_replace(path);
+    println!("Replaced: {rep:?}");
+    
+    let exe = std::env::current_exe()?;
+    // Spawn the new executable as a new process.
+    Command::new(exe).spawn()?;
+    // Exit the current process.
+    std::process::exit(0);
+
+    
+    
 }
 
 fn compute_hash(data: &[u8]) -> [u8; 32] {

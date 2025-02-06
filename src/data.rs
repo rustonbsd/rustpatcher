@@ -1,14 +1,43 @@
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
+use anyhow::bail;
 use bytes::Bytes;
 use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::to_vec;
 use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
+
+impl ToString for Version {
+    fn to_string(&self) -> String {
+        format!("{}.{}.{}",self.0,self.1,self.2)
+    }
+}
+
+impl FromStr for Version {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('.').collect();
+
+        if parts.len() != 3 {
+            bail!("wrong version format")
+        }
+
+        // Parse each component individually
+        let parse_component = |s: &str| -> anyhow::Result<i32> {
+            Ok(s.parse::<i32>()?)
+        };
+
+        let major = parse_component(parts[0])?;
+        let minor = parse_component(parts[1])?;
+        let patch = parse_component(parts[2])?;
+
+        Ok(Version(major, minor, patch))
+        }
+}
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -150,6 +179,7 @@ pub(crate) struct Inner {
 }
 
 pub mod serde_version {
+
     use serde::de::Error;
     use serde::{Deserializer, Serializer};
 
@@ -159,8 +189,7 @@ pub mod serde_version {
     where
         S: Serializer,
     {
-        let version = format!("{}.{}.{}", version.0, version.1, version.2);
-        serializer.serialize_str(&version)
+        serializer.serialize_str(&version.to_string())
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Version, D::Error>
@@ -168,19 +197,10 @@ pub mod serde_version {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let version_nums = s
-            .split(".")
-            .filter_map(|s| match s.parse::<i32>() {
-                Ok(n) => Some(n),
-                Err(_) => None,
-            })
-            .collect::<Vec<i32>>();
-
-        if !version_nums.len().eq(&3) {
-            return Err(D::Error::custom("invalid version"));
+        match Version::from_str(&s) {
+            Ok(version) => Ok(version),
+            Err(err) => Err(D::Error::custom(err)),
         }
-
-        Ok(Version(version_nums[0], version_nums[1], version_nums[2]))
     }
 }
 
