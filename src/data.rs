@@ -2,10 +2,14 @@ use std::{str::FromStr, sync::Arc};
 
 use anyhow::bail;
 use bytes::Bytes;
-use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
+use iroh_topic_tracker::topic_tracker::{Topic, TopicTracker};
+use pkarr::{dns, Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+
+use crate::{utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
 
 #[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
@@ -61,6 +65,12 @@ pub struct VersionInfo {
     pub signature: Signature,
     #[serde(with = "serde_z32_array")]
     pub trusted_key: [u8; PUBLIC_KEY_LENGTH],
+}
+
+impl VersionInfo {
+    pub fn to_topic_hash(&self) -> anyhow::Result<Topic> {
+        Ok(Topic::from_passphrase(&format!("{}.patcher.channel",serde_json::to_string(self)?)))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,10 +159,76 @@ impl VersionTracker {
         let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
+        println!("Sig: {}",z32::encode(&sig.to_bytes()));
+        println!("hash: {}",z32::encode(&compute_hash(&data)));
+        println!("trusted: {}",z32::encode(trusted_key));
+
         match pub_key.verify(&data, &sig) {
             Ok(_) => Ok(()),
             Err(_) => anyhow::bail!("signature doesn't match data"),
         }
+    }
+
+    pub async fn as_signed_packet(&self,secret_key: &[u8;SECRET_KEY_LENGTH]) -> anyhow::Result<SignedPacket> {
+        if self.version_info().is_none() {
+            bail!("uninitialized version info")
+        } 
+        if self.data().is_none() {
+            bail!("uninitialized data")
+        }
+
+        // Set reply id to unix time
+        let vi = self.version_info.clone().unwrap();
+
+        let mut last_reply_id: LastReplyId = LastReplyId::from_file(LAST_REPLY_ID_NAME)
+            .await
+            .unwrap_or(LastReplyId(0));
+        let mut packet = dns::Packet::new_reply(last_reply_id.0);
+
+        // Not sure if rap around will cause an error so to be safe
+        last_reply_id.0 = if last_reply_id.0 >= u16::MAX - 1 {
+            0
+        } else {
+            last_reply_id.0 + 1
+        };
+        let _ = last_reply_id.to_file("last_reply_id").await;
+
+        // Version
+        let version = serde_json::to_string(&vi.version)?;
+        packet.answers.push(dns::ResourceRecord::new(
+            dns::Name::new("_version").unwrap(),
+            dns::CLASS::IN,
+            30,
+            dns::rdata::RData::TXT(version.as_str().try_into()?),
+        ));
+        // Signature
+        let signature = serde_json::to_string(&vi.signature)?;
+        packet.answers.push(dns::ResourceRecord::new(
+            dns::Name::new("_signature").unwrap(),
+            dns::CLASS::IN,
+            30,
+            dns::rdata::RData::TXT(signature.as_str().try_into()?),
+        ));
+        // Hash
+        let hash = serde_json::to_string(&vi.hash)?;
+        packet.answers.push(dns::ResourceRecord::new(
+            dns::Name::new("_hash").unwrap(),
+            dns::CLASS::IN,
+            30,
+            dns::rdata::RData::TXT(hash.as_str().try_into()?),
+        ));
+        // TrustedKey
+        let trusted_key = serde_json::to_string(&self.trusted_key)?;
+        packet.answers.push(dns::ResourceRecord::new(
+            dns::Name::new("_trusted_key").unwrap(),
+            dns::CLASS::IN,
+            30,
+            dns::rdata::RData::TXT(trusted_key.as_str().try_into()?),
+        ));
+
+        let key_pair = Keypair::from_secret_key(secret_key);
+
+        Ok(SignedPacket::from_packet(&key_pair, &packet)?)
     }
 }
 
@@ -175,7 +251,9 @@ pub struct Patcher {
 #[derive(Debug, Clone)]
 pub(crate) struct Inner {
     pub endpoint: Endpoint,
+    pub topic_tracker: TopicTracker,
     pub latest_version: Arc<Mutex<VersionTracker>>,
+    pub latest_trusted_package: Arc<Mutex<Option<SignedPacket>>>,
 }
 
 pub mod serde_version {

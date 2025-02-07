@@ -1,9 +1,10 @@
-use std::io::SeekFrom;
+use std::{io::SeekFrom, time::Duration};
 
 use anyhow::bail;
 use iroh::Endpoint;
 use pkarr::dns::{self, Packet};
 use serde::{de::DeserializeOwned, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{
     fs::{create_dir, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
@@ -16,6 +17,8 @@ pub const PATCHER_DIR: &str = ".patcher";
 pub const SECRET_KEY_NAME: &str = "secret_key";
 pub const LATEST_VERSION_NAME: &str = "latest_version";
 pub const LAST_REPLY_ID_NAME: &str = "last_reply_id";
+
+pub const PKARR_PUBLISHING_INTERVAL: Duration = Duration::from_secs(60);
 
 pub async fn wait_for_relay(endpoint: &Endpoint) -> anyhow::Result<()> {
     while endpoint.home_relay().get().is_err() {
@@ -31,15 +34,15 @@ pub fn decode_rdata<T: DeserializeOwned + Clone>(
     let record = packet
         .answers
         .iter()
-        .find(|&record| record.name.to_string().starts_with(query))
+        .find(|&record| record.name.to_string().starts_with(&query))
         .ok_or_else(|| anyhow::anyhow!("record not found"))?;
 
     match &record.rdata {
         dns::rdata::RData::TXT(txt) => {
             let attrbs_raw = txt.attributes();
             let attrbs = attrbs_raw
-                .values()
-                .filter_map(|a| a.clone())
+                .keys()
+                .map(|a| a.clone())
                 .collect::<Vec<String>>()
                 .clone();
 
@@ -109,4 +112,13 @@ pub async fn create_check_patcher_dir() {
     if create {
         let _ = create_dir(PATCHER_DIR).await;
     }
+}
+
+
+pub fn compute_hash(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let mut buf = [0u8; 32];
+    buf.copy_from_slice(&hasher.finalize());
+    buf
 }

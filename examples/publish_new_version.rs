@@ -11,8 +11,8 @@ use tokio::{fs::File, io::AsyncReadExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let version = Version::from_str( env!("CARGO_PKG_VERSION"))?;
-    let file_path = "test.file"; //std::env::current_exe()?;
+    let version =Version(0, 1, 17) ;//Version::from_str( env!("CARGO_PKG_VERSION"))?;
+    let file_path = std::env::current_exe()?;
     let mut file = File::open(file_path).await?;
     let mut buf = vec![];
     file.read_to_end(&mut buf).await?;
@@ -60,6 +60,13 @@ async fn main() -> anyhow::Result<()> {
     let version_tracker = VersionTracker::load(&trusted_key, &version_info, &buf.clone().into(), vec![node_secret_key])?;
     version_tracker.to_file(LATEST_VERSION_NAME).await?;
 
+    println!("Signature validation check: {:?}",VersionTracker::verify_data(&trusted_key, &version_info, &buf.clone().into()));
+
+    println!("Sig: {}",z32::encode(&signature.to_bytes()));
+    println!("hash: {}",z32::encode(&hash));
+    println!("trusted: {}",z32::encode(&trusted_key));
+
+    return Ok(());
     let data = VersionTracker::from_file(LATEST_VERSION_NAME).await?.data().unwrap();
     let mut temp_file = tempfile::NamedTempFile::new()?;
     temp_file.write_all(&data)?;
@@ -70,11 +77,11 @@ async fn main() -> anyhow::Result<()> {
     
     let exe = std::env::current_exe()?;
     // Spawn the new executable as a new process.
-    Command::new(exe).spawn()?;
+    //Command::new(exe).spawn()?;
     // Exit the current process.
-    std::process::exit(0);
+    //std::process::exit(0);
 
-    
+    Ok(())
     
 }
 
