@@ -2,21 +2,27 @@ pub mod data;
 pub mod utils;
 
 use std::{
-    any::Any, cmp::min, future::Future, pin::Pin, str::FromStr, sync::{mpsc::Sender, Arc}, time::Instant
+    any::Any, clone, cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, process::Command, ptr, str::FromStr, sync::{mpsc::Sender, Arc}, time::Instant
 };
 
 use anyhow::{bail, Result};
+use bytes::Bytes;
 use data::{Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
-use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH};
+use ed25519_dalek::{
+    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+};
 use iroh::{
     endpoint::{Connecting, Endpoint, RecvStream, SendStream},
     protocol::ProtocolHandler,
     NodeAddr, NodeId, SecretKey,
 };
 use iroh_topic_tracker::topic_tracker::{self, TopicTracker};
+use nix::libc::{self, execv};
 use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::{
+    fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{
         mpsc::{self, Receiver},
@@ -25,17 +31,19 @@ use tokio::{
     time::sleep,
 };
 use utils::{
-    Storage, LAST_REPLY_ID_NAME, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, SECRET_KEY_NAME,
+    compute_hash, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME
 };
 
 use crate::utils::wait_for_relay;
 
+#[derive(Debug, Clone)]
 pub struct Builder {
     secret_key: [u8; SECRET_KEY_LENGTH],
     trusted_key: Option<[u8; PUBLIC_KEY_LENGTH]>,
     load_latest_version_from_file: bool,
     load_secret_key_from_file: bool,
     master_node: bool,
+    trusted_package: Option<SignedPacket>,
 }
 
 impl Builder {
@@ -46,6 +54,7 @@ impl Builder {
             load_latest_version_from_file: true,
             load_secret_key_from_file: true,
             master_node: false,
+            trusted_package: None,
         }
     }
 
@@ -76,7 +85,151 @@ impl Builder {
         self
     }
 
+    async fn check_cli(self) -> anyhow::Result<()> {
+        let args: Vec<String> = env::args().collect();
+
+        if args.len() == 3 && "rustpatcher".eq(&args[1]) {
+            match args[2].as_str() {
+                "init" => {
+                    self.init().await?;
+                    std::process::exit(0);
+                }
+                "publish" => {
+                    self.publish().await?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    async fn init(self) -> anyhow::Result<()> {
+        let publisher_signing_key = {
+            if let Ok(secret_key) = SecretKey::from_file(PUBLISHER_SIGNING_KEY_NAME).await {
+                SigningKey::from_bytes(&secret_key.to_bytes())
+            } else {
+                let mut csprng = OsRng;
+                let signing_key = SigningKey::generate(&mut csprng);
+
+                // persist generated keys
+                signing_key
+                    .clone()
+                    .to_file(PUBLISHER_SIGNING_KEY_NAME)
+                    .await?;
+                signing_key
+                    .clone()
+                    .verifying_key()
+                    .to_file(PUBLISHER_TRUSTED_KEY_NAME)
+                    .await?;
+                signing_key
+            }
+        };
+
+        println!("");
+        println!("");
+        println!("New Signing key generated in ./patcher/publisher_signing_key!");
+        println!("");
+        println!(
+            "   Trusted-Key = {}",
+            z32::encode(publisher_signing_key.verifying_key().as_bytes())
+        );
+        println!("");
+        println!("Insert the new trusted key into the patcher builder:");
+        println!("");
+        println!(
+            r#"let patcher = Patcher::new()
+    .trusted_key_from_z32_str("INSERT TRUSTED KEY HERE")
+    .build()
+    .await?;"#
+        );
+        println!("");
+        println!("");
+
+        Ok(())
+    }
+
+    async fn publish(self) -> anyhow::Result<()> {
+        let version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+        let file_path = std::env::current_exe()?;
+        let mut file = File::open(file_path).await?;
+        let mut buf = vec![];
+        file.read_to_end(&mut buf).await?;
+
+        println!("Version: {version:?}");
+
+        let mut publisher_signing_key = {
+            if let Ok(secret_key) = SecretKey::from_file(PUBLISHER_SIGNING_KEY_NAME).await {
+                SigningKey::from_bytes(&secret_key.to_bytes())
+            } else {
+                let mut csprng = OsRng;
+                let signing_key = SigningKey::generate(&mut csprng);
+
+                // persist generated keys
+                signing_key
+                    .clone()
+                    .to_file(PUBLISHER_SIGNING_KEY_NAME)
+                    .await?;
+                signing_key
+                    .clone()
+                    .verifying_key()
+                    .to_file(PUBLISHER_TRUSTED_KEY_NAME)
+                    .await?;
+                signing_key
+            }
+        };
+
+        let node_secret_key = {
+            if let Ok(secret_key) = ed25519_dalek::SecretKey::from_file(SECRET_KEY_NAME).await {
+                secret_key
+            } else {
+                let signing_key = *publisher_signing_key.as_bytes();
+                signing_key.clone().to_file(SECRET_KEY_NAME).await?;
+                signing_key
+            }
+        };
+
+        if !publisher_signing_key.as_bytes().eq(&node_secret_key) {
+            anyhow::bail!(
+                "secret key and publisher signing key don't match. not allowed for trusted node"
+            )
+        }
+
+        let signature = publisher_signing_key.sign(&buf.as_slice());
+        let hash = compute_hash(&buf);
+        let trusted_key = publisher_signing_key.verifying_key().as_bytes().clone();
+
+        let version_info = VersionInfo {
+            version,
+            hash,
+            signature,
+            trusted_key,
+        };
+        let version_tracker = VersionTracker::load(
+            &trusted_key,
+            &version_info,
+            &buf.clone().into(),
+            vec![node_secret_key],
+        )?;
+        version_tracker.to_file(LATEST_VERSION_NAME).await?;
+
+        
+        println!(
+            "Signature validation check: {:?}",
+            VersionTracker::verify_data(&trusted_key, &version_info, &buf.clone().into())
+        );
+
+        println!("Sig: {}", z32::encode(&signature.to_bytes()));
+        println!("hash: {}", z32::encode(&hash));
+        println!("trusted: {}", z32::encode(&trusted_key));
+
+        println!("Publish successfull!");
+
+        Ok(())
+    }
+
     pub async fn build(self: &mut Self) -> anyhow::Result<Patcher> {
+        self.clone().check_cli().await?;
+
         if self.trusted_key.is_none() {
             bail!("trusted key required")
         }
@@ -84,12 +237,21 @@ impl Builder {
         if self.load_secret_key_from_file {
             if let Ok(secret_key) = SecretKey::from_file(SECRET_KEY_NAME).await {
                 self.secret_key = secret_key.to_bytes();
-                if self.trusted_key.is_some() && SigningKey::from_bytes(&self.secret_key).verifying_key().as_bytes().eq(&self.trusted_key.unwrap()) {
+                if self.trusted_key.is_some()
+                    && SigningKey::from_bytes(&self.secret_key)
+                        .verifying_key()
+                        .as_bytes()
+                        .eq(&self.trusted_key.unwrap())
+                {
                     // Master node here
                     self.master_node = true;
                     println!("Master node");
                 }
             }
+        }
+
+        if let Ok(bytes) = Bytes::from_file(LAST_TRUSTED_PACKAGE).await {
+            self.trusted_package = Some(SignedPacket::from_bytes(&bytes)?);
         }
 
         // Iroh setup
@@ -103,12 +265,13 @@ impl Builder {
         let topic_tracker = TopicTracker::new(&endpoint);
         let patcher = if self.load_latest_version_from_file {
             let latest_version = VersionTracker::from_file(LATEST_VERSION_NAME).await;
-            
+
             if latest_version.is_ok() {
                 let latest_version = latest_version.unwrap();
                 let mut trusted_packet = None;
                 if self.master_node {
                     trusted_packet = Some(latest_version.as_signed_packet(&self.secret_key).await?);
+                    println!("master mode");
                 }
                 Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
@@ -118,20 +281,36 @@ impl Builder {
                     latest_version,
                 )
             } else {
-                Patcher::with_endpoint(&self.trusted_key.unwrap(), &endpoint,&topic_tracker)
+                
+                Patcher::with_latest_version(
+                    &self.trusted_key.unwrap(),
+                    &endpoint,
+                    &topic_tracker,
+                    self.trusted_package.clone(),
+                    VersionTracker::new(&self.trusted_key.unwrap()),
+                )
             }
         } else {
-            Patcher::with_endpoint(&self.trusted_key.unwrap(), &endpoint,&topic_tracker)
+            Patcher::with_latest_version(
+                &self.trusted_key.unwrap(),
+                &endpoint,
+                &topic_tracker,
+                self.trusted_package.clone(),
+                VersionTracker::new(&self.trusted_key.unwrap()),
+            )
         };
+
         let _router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(Patcher::ALPN, patcher.clone())
-            .accept(TopicTracker::ALPN, topic_tracker.clone())
             .spawn()
             .await?;
 
         Ok(patcher._spawn().await?)
     }
 }
+
+#[derive(Debug,Clone,Serialize,Deserialize)]
+struct SigPackage(pub Vec<u8>);
 
 impl Patcher {
     pub const ALPN: &'static [u8] = b"iroh/patcher/1";
@@ -145,6 +324,49 @@ impl Patcher {
         let lv = inner.latest_version.lock().await.clone();
         lv.to_file(LATEST_VERSION_NAME).await?;
 
+        let secret_key = self.secret_key.clone();
+        secret_key.to_file(SECRET_KEY_NAME).await?;
+
+        if let Some(lp) = inner.latest_trusted_package.lock().await.clone(){
+            lp.as_bytes().clone().to_vec().to_file(LAST_TRUSTED_PACKAGE).await?;
+        }
+
+
+        Ok(())
+    }
+
+    pub async fn update_available(self) -> Result<bool> {
+        let lv = self.inner.latest_version.lock().await.clone();
+        let version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+        let patcher_version = lv.version_info();
+
+        Ok(patcher_version.is_some() && version < patcher_version.unwrap().version)
+    }
+
+    pub async fn try_update(self) -> Result<()> {
+        if self.clone().update_available().await? == false {
+            bail!("no update available")
+        }
+        let lv = self.clone().inner.latest_version.lock().await.clone();
+        if lv.data().is_none() {
+            bail!("no new version found in version tracker")
+        }
+        let data = lv.data().unwrap();
+        let mut temp_file = tempfile::NamedTempFile::new()?;
+        temp_file.write_all(&data)?;
+        let path = temp_file.path();
+
+        self_replace::self_replace(path)?;
+
+        let exe_raw = std::env::current_exe()?;
+        let exe = CString::new(exe_raw.to_str().unwrap())?;
+
+        // The array must be null-terminated.
+        let args: [*const libc::c_char; 1] = [ptr::null()];
+
+        unsafe {
+            libc::execv(exe.as_ptr(), args.as_ptr());
+        }
         Ok(())
     }
 }
@@ -164,9 +386,9 @@ trait TPatcher: Sized {
     async fn _spawn(self) -> Result<Self>;
     async fn _spawn_pkarr_publish(self) -> Result<()>;
     async fn _spawn_pkarr_trusted_publish(self) -> Result<Receiver<VersionInfo>>;
-    async fn _spawn_updater(self, trusted_update_notifier: Receiver<VersionInfo>) -> Result<()>;
-    async fn _spawn_topic_tracker_update(self) -> Result<()>;
-    async fn topic_tracker_update(self) -> Result<()>;
+    async fn _spawn_updater(self, trusted_update_notifier: Receiver<VersionInfo>,tracker_update_notifier: Receiver<VersionInfo>) -> Result<()>;
+    async fn _spawn_topic_tracker_update(self) -> Result<Receiver<VersionInfo>>;
+    async fn topic_tracker_update(self) -> Result<Vec<iroh::PublicKey>>;
     async fn update(self: &mut Self, new_version_info: VersionInfo) -> Result<()>;
 }
 
@@ -192,7 +414,6 @@ impl TPatcher for Patcher {
         signed_packet: Option<SignedPacket>,
         latest_version: VersionTracker,
     ) -> Self {
-
         let me = Self {
             trusted_key: trusted_key.clone(),
             inner: Inner {
@@ -207,7 +428,6 @@ impl TPatcher for Patcher {
         me
     }
 
-
     // Publish the latest version_tracker own file under own key
     async fn _spawn_pkarr_publish(self) -> Result<()> {
         tokio::spawn({
@@ -218,6 +438,7 @@ impl TPatcher for Patcher {
                     if version_tracker.version_info().is_some() && version_tracker.data().is_some()
                     {
                         let res = me.publish_pkarr().await;
+                        //println!("pub: {:?}",res);
                     }
                     sleep(PKARR_PUBLISHING_INTERVAL).await;
                 }
@@ -236,64 +457,75 @@ impl TPatcher for Patcher {
                     if let Ok((trusted_version_info, trusted_signed_packet)) =
                         me.resolve_pkarr(&me.trusted_key).await
                     {
-                        // Check if latest_trusted_packet is the same
-                        {
-                            let l_trusted_packet =
-                                self.inner.latest_trusted_package.lock().await.clone();
-                            if l_trusted_packet.clone().is_some()
-                                && l_trusted_packet
-                                    .unwrap()
-                                    .as_bytes()
-                                    .eq(trusted_signed_packet.as_bytes())
-                            {
-                                // Same packet as last time (no update)
-                                println!("no update");
-                                sleep(PKARR_PUBLISHING_INTERVAL).await;
-                                continue;
-                            }
-                        }
-
-                        // new trusted packet
-                        println!("tp bytes: {} {}",z32::encode(trusted_signed_packet
-                            .public_key()
-                            .as_bytes()),z32::encode(&me.trusted_key));
                         if trusted_signed_packet
                             .public_key()
                             .as_bytes()
                             .eq(&me.trusted_key)
                         {
-                            println!("trusted_signed_packet: {}",trusted_signed_packet.public_key().to_z32());
+                            // Check if latest_trusted_packet is the same
+                            {
+                                let l_trusted_packet =
+                                    self.inner.latest_trusted_package.lock().await.clone();
+                                if l_trusted_packet.clone().is_some()
+                                    && l_trusted_packet
+                                        .unwrap()
+                                        .as_bytes()
+                                        .eq(trusted_signed_packet.as_bytes())
+                                {
+                                    // Same packet as last time (no update)
+                                    println!("no update"); //, {:?}",me.inner.latest_version.lock().await.version_info());
+                                    let a = self.publish_trusted_pkarr().await;
+                                    sleep(PKARR_PUBLISHING_INTERVAL).await;
+                                    continue;
+                                }
+                            }
+
+                            // Different package candidate
+
+                            //println!("trusted_signed_packet: {}",trusted_signed_packet.public_key().to_z32());
 
                             // check if newer version update notifier
                             let lt = me.inner.latest_version.lock().await.clone();
 
                             // Check for newer version signed packet even exists at all
                             {
-                                let me_signed_package = me.inner.latest_trusted_package.lock().await.clone();
-                                println!("ME: {}",me_signed_package.is_some());
-                                if me_signed_package.is_none() || lt.version_info().is_none() || (lt.version_info().is_some() && trusted_version_info.version > lt.version_info().unwrap().version) {
-                                    let mut signed_packet  = self.inner.latest_trusted_package.lock().await;
+                                let me_signed_package =
+                                    me.inner.latest_trusted_package.lock().await.clone();
+                                //println!("me signed package: {:?}", me_signed_package);
+                                if me_signed_package.is_none()
+                                    || (lt.version_info().is_some()
+                                        && trusted_version_info.version
+                                            > lt.version_info().unwrap().version)
+                                {
+                                    let mut signed_packet =
+                                        self.inner.latest_trusted_package.lock().await;
                                     *signed_packet = Some(trusted_signed_packet);
-                                    println!("Signed packet replaced:!");
+                                    drop(signed_packet);
+                                    println!("Signed packet replaced");
                                 }
                             }
 
-                            // 
-                            if lt.version_info().is_none() || trusted_version_info.version > lt.version_info().unwrap().version {
+                            // Update notifier
+                            if lt.version_info().is_none()
+                                || trusted_version_info.version > lt.version_info().unwrap().version
+                            {
                                 let vtc = self.inner.latest_version.lock().await.clone();
-                                if vtc.version_info().is_none() || vtc.version_info().unwrap().version < trusted_version_info.version {
-                                    println!("Send update notification: {:?}",trusted_version_info.version);
+                                if vtc.version_info().is_none()
+                                    || vtc.version_info().unwrap().version
+                                        < trusted_version_info.version
+                                {
+                                    //println!("Send update notification: {:?}",trusted_version_info.version);
                                     let _ = tx.send(trusted_version_info).await;
                                 }
                             }
                         }
                     } else {
-                        println!("Failed to resolve trusted key!");
+                        //println!("Failed to resolve trusted key!");
                     }
 
-                    println!("Publishing pkrarrar");
+                    //println!("Publishing pkrarrar");
                     let a = self.publish_trusted_pkarr().await;
-                    println!("published trusted: {a:?}");
+                    //println!("published trusted: {a:?}");
 
                     sleep(PKARR_PUBLISHING_INTERVAL).await;
                 }
@@ -305,20 +537,44 @@ impl TPatcher for Patcher {
     async fn _spawn_updater(
         self,
         mut trusted_update_notifier: Receiver<VersionInfo>,
+        mut tracker_update_notifier: Receiver<VersionInfo>,
     ) -> Result<()> {
         let my_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
         tokio::spawn({
             let me = self.clone();
             async move {
-                while let Some(potential_update) = trusted_update_notifier.recv().await {
-                    println!("Potential new version _spawn_updater: {}",potential_update.version.to_string());
-                    if my_version < potential_update.version {
-                        match me.clone().update(potential_update).await {
-                            Ok(_) => {
-                                let _ = me.clone().topic_tracker_update().await;
-                                println!("Update successfull")
-                            },
-                            Err(err) => println!("Update attempt failed: {err}"),
+                loop {
+                    tokio::select! {
+                        Some(potential_update) = trusted_update_notifier.recv() => {
+                            println!(
+                                "RCs: {}",
+                                potential_update.version.to_string()
+                            );
+                            if my_version < potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
+                                println!("Starting to update!");
+                                match me.clone().update(potential_update).await {
+                                    Ok(_) => {
+                                        let _ = me.clone().persist().await;
+                                    }
+                                    Err(err) => println!("Update attempt failed: "),
+                                }
+                            }
+                        }
+                        Some(potential_update) = tracker_update_notifier.recv() => {
+                            println!(
+                                "RCs: {}",
+                                potential_update.version.to_string()
+                            );
+                            if my_version < potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
+                                println!("Starting to update!");
+                                match me.clone().update(potential_update).await {
+                                    Ok(_) => {
+                                        let _ = me.clone().persist().await;
+                                        println!("Update successfull")
+                                    }
+                                    Err(err) => println!("Update attempt failed: "),
+                                }
+                            }
                         }
                     }
                 }
@@ -331,12 +587,14 @@ impl TPatcher for Patcher {
         // Update
         // 1. Find node ids
         // 2. Try update from node ids
-        println!("update: version {}",new_version_info.version.to_string());
-        
+        println!("update: version {}", new_version_info.version.to_string());
+
         // 1. Find node ids via topic tracker
         let topic_tracker = self.inner.topic_tracker.clone();
-        let node_ids = topic_tracker.get_topic_nodes(&new_version_info.to_topic_hash()?).await?;
-        println!("update: found node_ids: {:?}",node_ids);
+        let node_ids = topic_tracker
+            .get_topic_nodes(&new_version_info.to_topic_hash()?)
+            .await?;
+        println!("update: found node_ids: {:?}", node_ids);
         for node_id in node_ids.clone() {
             // 2. try and update
             match self
@@ -344,15 +602,14 @@ impl TPatcher for Patcher {
                 .await
             {
                 Ok(_) => {
-                    println!(
-                        "New version downloaded: {:?}",
-                        self.inner.latest_version.lock().await
-                    );
                     let _ = self.clone().persist().await;
-                    return Ok(())
+                    println!(
+                        "New version downloaded"
+                    );
+                    return Ok(());
                 }
                 Err(err) => {
-                    println!("failed: {err}");
+                    println!("New version download failed: ");
                     let mut lt = self.inner.latest_version.lock().await;
                     lt.rm_node_id(&node_id.as_bytes());
                 }
@@ -362,7 +619,6 @@ impl TPatcher for Patcher {
     }
 
     async fn _spawn(self) -> Result<Self> {
-        
         // Iroh
         tokio::spawn({
             let me2 = self.clone();
@@ -378,43 +634,51 @@ impl TPatcher for Patcher {
                             });
                         }
                         Err(err) => {
-                            println!("Failed to connect {err}");
+                            println!("Failed to connect");
                         }
                     }
                 }
             }
         });
-        
 
+        let tracker_notifier = self.clone()._spawn_topic_tracker_update().await?;
         self.clone()._spawn_pkarr_publish().await?;
         let notifier = self.clone()._spawn_pkarr_trusted_publish().await?;
-        self.clone()._spawn_updater(notifier).await?;
-        self.clone()._spawn_topic_tracker_update().await?;
+        self.clone()._spawn_updater(notifier,tracker_notifier).await?;
 
         Ok(self)
     }
-    
-    async fn _spawn_topic_tracker_update(self) -> Result<()> {
+
+    async fn _spawn_topic_tracker_update(self) -> Result<Receiver<VersionInfo>> {
+        let (tx, rx) = mpsc::channel(1024);
+
         tokio::spawn({
             let me = self.clone();
             async move {
                 loop {
-                    let res = me.clone().topic_tracker_update().await;
-                    println!("topic tracker update: {:?}",res);
+                    let node_ids = me.clone().topic_tracker_update().await;
+                    if let Ok(node_ids) = node_ids {
+                        for node_id in node_ids {
+                            if let Ok((vi, sp)) = me.resolve_pkarr(&node_id.as_bytes()).await {
+                                let _ = tx.send(vi).await;
+                            }
+                        }
+                    }
                     sleep(PKARR_PUBLISHING_INTERVAL).await
                 }
             }
         });
-        Ok(())
+        Ok(rx)
     }
-    
-    async fn topic_tracker_update(self) -> Result<()> {
-        if let Some(vi) = self.inner.latest_version.lock().await.version_info() {
+
+    async fn topic_tracker_update(self) -> Result<Vec<iroh::PublicKey>> {
+        let lv = self.inner.latest_version.lock().await.clone();
+        if let Some(vi) = lv.version_info() {
             if let Ok(topic_hash) = vi.to_topic_hash() {
-                let _ = self.inner.topic_tracker.clone().get_topic_nodes(&topic_hash).await;
+                return self.inner.topic_tracker.get_topic_nodes(&topic_hash).await
             }
         }
-        Ok(())
+        Ok(vec![])
     }
 }
 
@@ -427,26 +691,26 @@ trait TPatcherIroh: Sized {
 
 impl TPatcherIroh for Patcher {
     async fn send_msg(msg: Protocol, send: &mut SendStream) -> Result<()> {
-        println!("Send msg: {:?}",msg.type_id());
         let encoded = postcard::to_stdvec(&msg)?;
         assert!(encoded.len() <= Self::MAX_MSG_SIZE_BYTES as usize);
 
         send.write_u64_le(encoded.len() as u64).await?;
         let chunk_size = 1024;
-        println!("Send chunk count: {chunk_size}");
-        let chunks = encoded.chunks(chunk_size).into_iter().collect::<Vec<&[u8]>>();
+        let chunks = encoded
+            .chunks(chunk_size)
+            .into_iter()
+            .collect::<Vec<&[u8]>>();
         for mut chunk in chunks {
-            //println!("Iroh-Sending {}",chunk.len());
-            println!("Send attepmt: {:?}",send.write_all(&mut chunk).await);
-            println!("chunk: {chunk:?}");
+            send.write_all(&mut chunk).await?;
         }
-        
+
         Ok(())
     }
 
     async fn recv_msg(recv: &mut RecvStream) -> Result<Protocol> {
+        println!("starting to recv msg");
         let len = recv.read_u64_le().await? as usize;
-        println!("Starting to receive... {len}");
+        println!("Recv: len: {len}");
 
         assert!(len <= Self::MAX_MSG_SIZE_BYTES as usize);
 
@@ -454,35 +718,36 @@ impl TPatcherIroh for Patcher {
         let mut data = Vec::with_capacity(len);
 
         while let Some(size) = recv.read(&mut buffer).await? {
-            data.extend_from_slice(&buffer[..min(size,len-data.len())]);
+            data.extend_from_slice(&buffer[..min(size, len - data.len())]);
 
             if data.len() == len {
                 break;
             }
         }
 
-        println!("Data");
         let msg: Protocol = postcard::from_bytes(&data)?;
-        println!("Recv msg: {msg:?}");
         Ok(msg)
     }
 
     async fn try_update(self: &mut Self, node_id: NodeId) -> Result<()> {
-        println!("try update");
+        //println!("try update");
         let (node_version_info, _) = self.resolve_pkarr(node_id.as_bytes()).await?;
         {
-            println!("pkrr res: ");
+            //println!("pkrr res: ");
             let me_version_info = self.inner.latest_version.lock().await.version_info();
             // if we dont have an inner version update
             if me_version_info.is_some()
                 && node_version_info.version <= me_version_info.unwrap().version
             {
-                bail!("node version not newer {}",node_version_info.version.to_string())
+                bail!(
+                    "node version not newer {}",
+                    node_version_info.version.to_string()
+                )
             }
         }
 
         wait_for_relay(&self.inner.endpoint).await?;
-        println!("got record: {:?}",z32::encode(node_id.as_bytes()));
+        println!("update: got record: {:?}", z32::encode(node_id.as_bytes()));
 
         let conn = self
             .inner
@@ -490,17 +755,16 @@ impl TPatcherIroh for Patcher {
             .connect(NodeAddr::new(node_id), Self::ALPN)
             .await?;
 
-        println!("update: connected to {}",z32::encode(node_id.as_bytes()));
+        println!("update: connected to {}", z32::encode(node_id.as_bytes()));
         let (mut send, mut recv) = conn.open_bi().await?;
 
         let msg = Protocol::Request;
-        println!("pre send");
         //Self::send_msg(msg, &mut send).await?;
-        println!("update: Req send: {:?}",Self::send_msg(msg, &mut send).await);
+        Self::send_msg(msg, &mut send).await?;
 
         match Self::recv_msg(&mut recv).await? {
             Protocol::Data(version_info, data) => {
-                println!("update: data received: {}",data.len());
+                println!("update: data received: {}", data.len());
                 let mut latest_vt = self.inner.latest_version.lock().await;
                 let latest_version_info = latest_vt.version_info();
                 if latest_version_info.is_none()
@@ -515,11 +779,15 @@ impl TPatcherIroh for Patcher {
                     )?;
                 }
                 drop(latest_vt);
+
+                self.publish_pkarr().await?;
+                println!("After data received and lv overwrite pkarr published");
             }
             Protocol::DataUnavailable => {}
             other => {
-                println!("accepted - illegal msg: {:?}", other);
-                 bail!("illegal message received")},
+                println!("update - illegal msg: ");
+                bail!("illegal message received")
+            }
         };
 
         Self::send_msg(Protocol::Done, &mut send).await?;
@@ -530,11 +798,14 @@ impl TPatcherIroh for Patcher {
     async fn accept_handler(&self, conn: Connecting) -> Result<()> {
         let connection = conn.await?;
         let remote_node_id = iroh::endpoint::get_remote_node_id(&connection)?;
-        println!("accept - new connection accepted: {}",z32::encode(remote_node_id.as_bytes()));
+        println!(
+            "accept - new connection accepted: {}",
+            z32::encode(remote_node_id.as_bytes())
+        );
 
         let (mut send, mut recv) = connection.accept_bi().await?;
         let msg = Self::recv_msg(&mut recv).await;
-        println!("accepted - Raw:msg: {msg:?}");
+        //println!("accepted - Raw:msg: {msg:?}");
         let msg = msg?;
         println!("accepted - First recv");
 
@@ -587,7 +858,7 @@ impl TPatcherPkarr for Patcher {
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],
     ) -> anyhow::Result<(VersionInfo, SignedPacket)> {
-        let client = PkarrClient::builder().build().unwrap();
+        let client = PkarrClient::builder().cache_size(NonZero::new(1).unwrap()).build().unwrap();
         let pkarr_pk = PublicKey::try_from(public_key)?;
 
         match client.resolve(&pkarr_pk) {
@@ -599,7 +870,7 @@ impl TPatcherPkarr for Patcher {
                 let signature = utils::decode_rdata::<Signature>(packet, "_signature")?;
                 let trusted_key =
                     utils::decode_rdata::<[u8; PUBLIC_KEY_LENGTH]>(packet, "_trusted_key")?;
-               
+
                 Ok((
                     VersionInfo {
                         version,
@@ -610,19 +881,19 @@ impl TPatcherPkarr for Patcher {
                     pkg,
                 ))
             }
-            _ => bail!("failed to resolve package"),
+            _ => bail!("failed to resolve package: {}", z32::encode(public_key)),
         }
     }
 
     async fn publish_trusted_pkarr(&self) -> anyhow::Result<()> {
         let signed_packet = { self.inner.latest_trusted_package.lock().await.clone() };
-        println!("Signed packet: {}",signed_packet.is_some());
+        //println!("Signed packet: {}",signed_packet.is_some());
         if let Some(signed_packet) = signed_packet {
             let client = PkarrClient::builder().build().unwrap();
-            println!("publish attempt");
+            //println!("publish attempt: {:?}", signed_packet.packet());
             return match client.publish(&signed_packet) {
                 Ok(_) => Ok(()),
-                Err(err) => bail!("bail {}",err),
+                Err(err) => bail!("bail {}", err),
             };
         }
         bail!("nomb")
@@ -691,14 +962,10 @@ impl TPatcherPkarr for Patcher {
 
         match client.publish(&signed_packet) {
             Ok(()) => {
-                println!(
-                    "\nSuccessfully published {} in {:?}",
-                    keypair.public_key(),
-                    instant.elapsed(),
-                );
+                //println!("pub {}", z32::encode(keypair.public_key().as_bytes()),);
             }
             Err(err) => {
-                println!("\nFailed to publish {} \n {}", keypair.public_key(), err);
+                //println!("\nFailed to publish {} \n {}", keypair.public_key(), err);
             }
         };
 

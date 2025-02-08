@@ -159,9 +159,9 @@ impl VersionTracker {
         let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
-        println!("Sig: {}",z32::encode(&sig.to_bytes()));
-        println!("hash: {}",z32::encode(&compute_hash(&data)));
-        println!("trusted: {}",z32::encode(trusted_key));
+        //println!("Sig: {}",z32::encode(&sig.to_bytes()));
+        //println!("hash: {}",z32::encode(&compute_hash(&data)));
+        //println!("trusted: {}",z32::encode(trusted_key));
 
         match pub_key.verify(&data, &sig) {
             Ok(_) => Ok(()),

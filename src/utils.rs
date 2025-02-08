@@ -17,8 +17,9 @@ pub const PATCHER_DIR: &str = ".patcher";
 pub const SECRET_KEY_NAME: &str = "secret_key";
 pub const LATEST_VERSION_NAME: &str = "latest_version";
 pub const LAST_REPLY_ID_NAME: &str = "last_reply_id";
+pub const LAST_TRUSTED_PACKAGE: &str = "last_trusted_package";
 
-pub const PKARR_PUBLISHING_INTERVAL: Duration = Duration::from_secs(60);
+pub const PKARR_PUBLISHING_INTERVAL: Duration = Duration::from_secs(10);
 
 pub async fn wait_for_relay(endpoint: &Endpoint) -> anyhow::Result<()> {
     while endpoint.home_relay().get().is_err() {

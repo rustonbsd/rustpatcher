@@ -1,6 +1,6 @@
 [package]
 name = "rustpatcher"
-version = "0.1.1"
+version = "0.3.24"
 edition = "2021"
 authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
 description = "p2p patching system"
@@ -29,6 +29,7 @@ pkarr = "2"
 clap = { version = "4.4.8", features = ["derive"] }
 tempfile = "3"
 self-replace = "1"
+nix = { version = "0.29", features = ["process"] }
 
 
 [dev-dependencies]

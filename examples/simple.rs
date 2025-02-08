@@ -1,19 +1,23 @@
 use std::time::Duration;
 
-use rustpatcher::data::Patcher;
+use rustpatcher::data::{Patcher, Version};
 use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str("bdj4qg7imiqr6mo4geq638ri7fjdbs51s1c5jqyc45d4ri3ux64o")
-        .load_secret_key_from_file(true)
-        .load_latest_version_from_file(true)
+        .trusted_key_from_z32_str("ewkijs9aynd1gxp8bd7y73qkc7maqc8qh1j8kej9dumuwr9cq7by")
         .build()
         .await?;
 
+    println!("Paul war hier!");
+    println!("Version: {}", env!("CARGO_PKG_VERSION").to_string());
+
     loop {
-        sleep(Duration::from_secs(99999)).await;
+        sleep(Duration::from_secs(10)).await;
+        if patcher.clone().update_available().await? {
+            println!("Updating: {:?}",patcher.clone().try_update().await?);
+        }
     }
     Ok(())
 
