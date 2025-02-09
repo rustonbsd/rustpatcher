@@ -2,7 +2,20 @@ pub mod data;
 pub mod utils;
 
 use std::{
-    any::Any, clone, cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, process::Command, ptr, str::FromStr, sync::{mpsc::Sender, Arc}, time::Instant
+    any::Any,
+    clone,
+    cmp::min,
+    env,
+    ffi::CString,
+    future::Future,
+    io::Write,
+    num::NonZero,
+    pin::Pin,
+    process::Command,
+    ptr,
+    str::FromStr,
+    sync::{mpsc::Sender, Arc},
+    time::Instant,
 };
 
 use anyhow::{bail, Result};
@@ -20,6 +33,7 @@ use iroh_topic_tracker::topic_tracker::{self, TopicTracker};
 use nix::libc::{self, execv};
 use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
 use rand::rngs::OsRng;
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs::File,
@@ -31,7 +45,9 @@ use tokio::{
     time::sleep,
 };
 use utils::{
-    compute_hash, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME
+    compute_hash, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME,
+    PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME,
+    SECRET_KEY_NAME,
 };
 
 use crate::utils::wait_for_relay;
@@ -212,7 +228,6 @@ impl Builder {
         )?;
         version_tracker.to_file(LATEST_VERSION_NAME).await?;
 
-        
         println!(
             "Signature validation check: {:?}",
             VersionTracker::verify_data(&trusted_key, &version_info, &buf.clone().into())
@@ -281,7 +296,6 @@ impl Builder {
                     latest_version,
                 )
             } else {
-                
                 Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
                     &endpoint,
@@ -309,7 +323,7 @@ impl Builder {
     }
 }
 
-#[derive(Debug,Clone,Serialize,Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SigPackage(pub Vec<u8>);
 
 impl Patcher {
@@ -327,10 +341,13 @@ impl Patcher {
         let secret_key = self.secret_key.clone();
         secret_key.to_file(SECRET_KEY_NAME).await?;
 
-        if let Some(lp) = inner.latest_trusted_package.lock().await.clone(){
-            lp.as_bytes().clone().to_vec().to_file(LAST_TRUSTED_PACKAGE).await?;
+        if let Some(lp) = inner.latest_trusted_package.lock().await.clone() {
+            lp.as_bytes()
+                .clone()
+                .to_vec()
+                .to_file(LAST_TRUSTED_PACKAGE)
+                .await?;
         }
-
 
         Ok(())
     }
@@ -386,7 +403,11 @@ trait TPatcher: Sized {
     async fn _spawn(self) -> Result<Self>;
     async fn _spawn_pkarr_publish(self) -> Result<()>;
     async fn _spawn_pkarr_trusted_publish(self) -> Result<Receiver<VersionInfo>>;
-    async fn _spawn_updater(self, trusted_update_notifier: Receiver<VersionInfo>,tracker_update_notifier: Receiver<VersionInfo>) -> Result<()>;
+    async fn _spawn_updater(
+        self,
+        trusted_update_notifier: Receiver<VersionInfo>,
+        tracker_update_notifier: Receiver<VersionInfo>,
+    ) -> Result<()>;
     async fn _spawn_topic_tracker_update(self) -> Result<Receiver<VersionInfo>>;
     async fn topic_tracker_update(self) -> Result<Vec<iroh::PublicKey>>;
     async fn update(self: &mut Self, new_version_info: VersionInfo) -> Result<()>;
@@ -603,9 +624,7 @@ impl TPatcher for Patcher {
             {
                 Ok(_) => {
                     let _ = self.clone().persist().await;
-                    println!(
-                        "New version downloaded"
-                    );
+                    println!("New version downloaded");
                     return Ok(());
                 }
                 Err(err) => {
@@ -644,7 +663,9 @@ impl TPatcher for Patcher {
         let tracker_notifier = self.clone()._spawn_topic_tracker_update().await?;
         self.clone()._spawn_pkarr_publish().await?;
         let notifier = self.clone()._spawn_pkarr_trusted_publish().await?;
-        self.clone()._spawn_updater(notifier,tracker_notifier).await?;
+        self.clone()
+            ._spawn_updater(notifier, tracker_notifier)
+            .await?;
 
         Ok(self)
     }
@@ -675,7 +696,7 @@ impl TPatcher for Patcher {
         let lv = self.inner.latest_version.lock().await.clone();
         if let Some(vi) = lv.version_info() {
             if let Ok(topic_hash) = vi.to_topic_hash() {
-                return self.inner.topic_tracker.get_topic_nodes(&topic_hash).await
+                return self.inner.topic_tracker.get_topic_nodes(&topic_hash).await;
             }
         }
         Ok(vec![])
@@ -851,6 +872,8 @@ trait TPatcherPkarr: Sized {
     fn publish_pkarr(&self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
     fn publish_trusted_pkarr(&self)
         -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    fn pkarr_dht_relay_switch_get(&self,public_key: &[u8; PUBLIC_KEY_LENGTH]) -> impl std::future::Future<Output = Result<Option<SignedPacket>>> + Send;
+    fn pkarr_dht_relay_switch_put(&self,public_key: &[u8; PUBLIC_KEY_LENGTH],signed_packet: SignedPacket) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 impl TPatcherPkarr for Patcher {
@@ -858,10 +881,8 @@ impl TPatcherPkarr for Patcher {
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],
     ) -> anyhow::Result<(VersionInfo, SignedPacket)> {
-        let client = PkarrClient::builder().cache_size(NonZero::new(1).unwrap()).build().unwrap();
-        let pkarr_pk = PublicKey::try_from(public_key)?;
-
-        match client.resolve(&pkarr_pk) {
+        
+        match self.pkarr_dht_relay_switch_get(public_key).await {
             Ok(Some(pkg)) => {
                 let packet = pkg.packet();
 
@@ -889,9 +910,8 @@ impl TPatcherPkarr for Patcher {
         let signed_packet = { self.inner.latest_trusted_package.lock().await.clone() };
         //println!("Signed packet: {}",signed_packet.is_some());
         if let Some(signed_packet) = signed_packet {
-            let client = PkarrClient::builder().build().unwrap();
             //println!("publish attempt: {:?}", signed_packet.packet());
-            return match client.publish(&signed_packet) {
+            return match self.pkarr_dht_relay_switch_put(&self.trusted_key,signed_packet).await {
                 Ok(_) => Ok(()),
                 Err(err) => bail!("bail {}", err),
             };
@@ -900,9 +920,6 @@ impl TPatcherPkarr for Patcher {
     }
 
     async fn publish_pkarr(&self) -> anyhow::Result<()> {
-        let client = PkarrClient::builder().build().unwrap();
-        let keypair = Keypair::from_secret_key(&self.secret_key);
-
         let lt = { self.inner.latest_version.lock().await.clone() };
 
         if lt.version_info().is_none() {
@@ -956,20 +973,98 @@ impl TPatcherPkarr for Patcher {
             30,
             dns::rdata::RData::TXT(trusted_key.as_str().try_into()?),
         ));
-
+        
+        let keypair = Keypair::from_secret_key(&self.secret_key);
         let signed_packet = SignedPacket::from_packet(&keypair, &packet)?;
-        let instant = Instant::now();
 
-        match client.publish(&signed_packet) {
-            Ok(()) => {
-                //println!("pub {}", z32::encode(keypair.public_key().as_bytes()),);
-            }
+        match self.pkarr_dht_relay_switch_put(&self.public_key,signed_packet).await {
+            Ok(_) => {},
             Err(err) => {
-                //println!("\nFailed to publish {} \n {}", keypair.public_key(), err);
-            }
+                println!("pkarr pub: {err}");
+            },
         };
 
         Ok(())
+    }
+    
+    async fn pkarr_dht_relay_switch_get(&self,public_key: &[u8; PUBLIC_KEY_LENGTH]) -> Result<Option<SignedPacket>> {
+        let mut signed_package = None;
+
+        // Pkarr Relay server
+        let req_client = reqwest::ClientBuilder::new().build()?;
+        if let Ok(resp) = req_client
+            .request(
+                Method::GET,
+                format!("https://relay.pkarr.org/{}", z32::encode(public_key)),
+            )
+            .send()
+            .await
+        {
+            if resp.status() == StatusCode::OK {
+                if let Ok(content) = resp.bytes().await {
+                    if let Ok(_signed_package) = SignedPacket::from_bytes({
+                        let mut temp = public_key.to_vec();
+                        temp.extend_from_slice(&content);
+                        &bytes::Bytes::from_owner(temp)
+                    }){
+                        println!("PKARR GET RELAY");
+                        return Ok(Some(_signed_package))
+                    }
+                }
+            }
+        }
+
+        // Pkarr dht
+        let client = PkarrClient::builder()
+            .cache_size(NonZero::new(1).unwrap())
+            .build()
+            .unwrap();
+        let pkarr_pk = PublicKey::try_from(public_key)?;
+        if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
+            signed_package = _signed_package;
+
+            println!("PKARR GET DHT");
+        }
+    
+
+        Ok(signed_package)
+    }
+    
+    async fn pkarr_dht_relay_switch_put(&self,public_key: &[u8; PUBLIC_KEY_LENGTH],signed_packet: SignedPacket) -> Result<()> {
+        
+        // Pkarr Relay server
+        let req_client = reqwest::ClientBuilder::new().build()?;
+        let mut packet_bytes: Vec<u8> = signed_packet.as_bytes()[32..].to_vec();
+
+        if let Ok(resp) = req_client
+            .request(
+                Method::PUT,
+                format!("https://relay.pkarr.org/{}", z32::encode(public_key)),
+            )
+            .body(packet_bytes)
+            .send()
+            .await
+        {
+            if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT {
+
+                println!("PKARR PUT RELAY");
+                return Ok(())
+            }
+            let s = resp.status();
+            let text = resp.text().await;
+            println!("resp {:?} {:?}",&text,s);
+            
+        }
+
+        // Pkarr dht
+        let client = PkarrClient::builder().build().unwrap();
+        match client.publish(&signed_packet) {
+            Ok(_) => {
+                println!("PKARR PUT DHT");
+                Ok(())
+            },
+            Err(_) => bail!("dht and relay failed to publish pkarr record for nodeid: {}",z32::encode(public_key)),
+        }
     }
 }
 
