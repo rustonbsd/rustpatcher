@@ -12,7 +12,7 @@ categories = ["network-programming"]
 
 [dependencies]
 iroh = "0.31"
-iroh-topic-tracker = {version = "0.1.10" }
+iroh-topic-tracker = {version = "0.1.11" }
 tokio ={ version="1",features = ["full"] }
 anyhow = "1"
 rand = "0.8.0"
@@ -22,7 +22,7 @@ serde_bytes = "0.11"
 bytes = { version = "1.7", features = ["serde"] }
 ed25519-dalek = { version = "2.0.0", features = ["serde", "rand_core"] }
 postcard = { version = "1", default-features = false, features = ["alloc", "use-std", "experimental-derive"] }
-futures-lite = "2"
+futures-lite = "2.6.0"
 z32 = "1"
 sha2 = "0.10"
 pkarr = "2"
