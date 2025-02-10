@@ -1,17 +1,27 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use rustpatcher::data::{Patcher, Version};
 use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenv::dotenv().expect("dotenv failed to load");
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str("ewkijs9aynd1gxp8bd7y73qkc7maqc8qh1j8kej9dumuwr9cq7by")
+        .trusted_key_from_z32_str(&env::var("TRUSTED_KEY")?)
         .build()
         .await?;
 
-    println!("Paul war hier!");
-    println!("Version: {}", env!("CARGO_PKG_VERSION").to_string());
+    println!("1Paul war hier!");
+    println!("2Paul war hier!");
+    println!("3Paul war hier!");
+    println!("4Paul war hier!");
+    println!("5Paul war hier!");
+    println!("6Paul war hier!");
+    println!("7Paul war hier!");
+    println!("8Paul war hier!");
+    println!("9Paul war hier!");
+    println!("10Paul war hier!");
+    println!("Version: {}\n\n--\n", env!("CARGO_PKG_VERSION").to_string());
 
     loop {
         sleep(Duration::from_secs(10)).await;

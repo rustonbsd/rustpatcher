@@ -91,6 +91,7 @@ impl<S: Serialize + DeserializeOwned + Clone + Send> Storage<S> for S {
 
         let buf = serde_json::to_vec(&self)?;
         file.write_all(buf.as_slice()).await?;
+        file.flush().await?;
 
         Ok(())
     }

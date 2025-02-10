@@ -59,7 +59,7 @@ pub struct Builder {
     load_latest_version_from_file: bool,
     load_secret_key_from_file: bool,
     master_node: bool,
-    trusted_package: Option<SignedPacket>,
+    trusted_packet: Option<SignedPacket>,
 }
 
 impl Builder {
@@ -70,7 +70,7 @@ impl Builder {
             load_latest_version_from_file: true,
             load_secret_key_from_file: true,
             master_node: false,
-            trusted_package: None,
+            trusted_packet: None,
         }
     }
 
@@ -265,8 +265,9 @@ impl Builder {
             }
         }
 
-        if let Ok(bytes) = Bytes::from_file(LAST_TRUSTED_PACKAGE).await {
-            self.trusted_package = Some(SignedPacket::from_bytes(&bytes)?);
+        if let Ok(bytes) = Vec::from_file(LAST_TRUSTED_PACKAGE).await {
+            self.trusted_packet = Some(SignedPacket::from_bytes(&Bytes::copy_from_slice(bytes.as_slice()))?);
+
         }
 
         // Iroh setup
@@ -283,41 +284,43 @@ impl Builder {
 
             if latest_version.is_ok() {
                 let latest_version = latest_version.unwrap();
-                let mut trusted_packet = None;
                 if self.master_node {
-                    trusted_packet = Some(latest_version.as_signed_packet(&self.secret_key).await?);
+                    self.trusted_packet = Some(latest_version.as_signed_packet(&self.secret_key).await?);
                     println!("master mode");
                 }
                 Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
                     &endpoint,
                     &topic_tracker,
-                    trusted_packet,
+                    self.trusted_packet.clone(),
                     latest_version,
                 )
             } else {
-                Patcher::with_latest_version(
+
+                let me = Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
                     &endpoint,
                     &topic_tracker,
-                    self.trusted_package.clone(),
+                    self.trusted_packet.clone(),
                     VersionTracker::new(&self.trusted_key.unwrap()),
-                )
+                );
+            me
             }
         } else {
             Patcher::with_latest_version(
                 &self.trusted_key.unwrap(),
                 &endpoint,
                 &topic_tracker,
-                self.trusted_package.clone(),
+                self.trusted_packet.clone(),
                 VersionTracker::new(&self.trusted_key.unwrap()),
             )
         };
-
+        
         let _router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(Patcher::ALPN, patcher.clone())
             .spawn()
             .await?;
+
 
         Ok(patcher._spawn().await?)
     }
@@ -333,10 +336,10 @@ impl Patcher {
         Builder::new()
     }
 
-    pub async fn persist(self) -> anyhow::Result<()> {
+    pub async fn persist(&self) -> anyhow::Result<()> {
         let inner = self.inner.clone();
         let lv = inner.latest_version.lock().await.clone();
-        lv.to_file(LATEST_VERSION_NAME).await?;
+        println!("persist: {:?}",lv.to_file(LATEST_VERSION_NAME).await);
 
         let secret_key = self.secret_key.clone();
         secret_key.to_file(SECRET_KEY_NAME).await?;
@@ -522,7 +525,9 @@ impl TPatcher for Patcher {
                                         self.inner.latest_trusted_package.lock().await;
                                     *signed_packet = Some(trusted_signed_packet);
                                     drop(signed_packet);
+                                    let _ = self.persist().await;
                                     println!("Signed packet replaced");
+
                                 }
                             }
 
@@ -575,7 +580,6 @@ impl TPatcher for Patcher {
                                 println!("Starting to update!");
                                 match me.clone().update(potential_update).await {
                                     Ok(_) => {
-                                        let _ = me.clone().persist().await;
                                     }
                                     Err(err) => println!("Update attempt failed: "),
                                 }
@@ -590,7 +594,6 @@ impl TPatcher for Patcher {
                                 println!("Starting to update!");
                                 match me.clone().update(potential_update).await {
                                     Ok(_) => {
-                                        let _ = me.clone().persist().await;
                                         println!("Update successfull")
                                     }
                                     Err(err) => println!("Update attempt failed: "),
@@ -623,7 +626,6 @@ impl TPatcher for Patcher {
                 .await
             {
                 Ok(_) => {
-                    let _ = self.clone().persist().await;
                     println!("New version downloaded");
                     return Ok(());
                 }
@@ -757,6 +759,7 @@ impl TPatcherIroh for Patcher {
             //println!("pkrr res: ");
             let me_version_info = self.inner.latest_version.lock().await.version_info();
             // if we dont have an inner version update
+            println!("try_update: me version info: is_some == {}",me_version_info.is_some());
             if me_version_info.is_some()
                 && node_version_info.version <= me_version_info.unwrap().version
             {
@@ -800,6 +803,7 @@ impl TPatcherIroh for Patcher {
                     )?;
                 }
                 drop(latest_vt);
+                self.persist().await?;
 
                 self.publish_pkarr().await?;
                 println!("After data received and lv overwrite pkarr published");
