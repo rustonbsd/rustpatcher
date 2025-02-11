@@ -1,13 +1,13 @@
 use std::{env, time::Duration};
 
-use rustpatcher::data::{Patcher, Version};
+use rustpatcher::data::Patcher;
 use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().expect("dotenv failed to load");
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str(&env::var("TRUSTED_KEY")?)
+        .trusted_key_from_z32_str("ewkijs9aynd1gxp8bd7y73qkc7maqc8qh1j8kej9dumuwr9cq7by")
         .build()
         .await?;
 
@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Updating: {:?}",patcher.clone().try_update().await?);
         }
     }
-    Ok(())
+    
 
     // - rustpatcher create trustkey
     //    just create key pair so trusted_key can be used in patcher builder (required)

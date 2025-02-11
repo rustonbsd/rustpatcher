@@ -2,14 +2,14 @@ use std::{str::FromStr, sync::Arc};
 
 use anyhow::bail;
 use bytes::Bytes;
-use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
 use iroh_topic_tracker::topic_tracker::{Topic, TopicTracker};
 use pkarr::{dns, Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
+use crate::{utils::{Storage, LAST_REPLY_ID_NAME}, LastReplyId};
 
 #[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
@@ -232,9 +232,20 @@ impl VersionTracker {
     }
 }
 
+#[derive(Debug,Clone,Serialize,Deserialize)]
+struct AuthRequest {
+    sign_request: Bytes,
+}
+
+#[derive(Debug,Clone,Serialize,Deserialize)]
+struct Auth {
+    signature: Signature,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Protocol {
-    Request,
+    AuthRequest(AuthRequest),
+    Request(Auth),
     Data(VersionInfo, Bytes),
     DataUnavailable,
     Done,

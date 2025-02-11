@@ -5,8 +5,6 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    any::Any,
-    clone,
     cmp::min,
     env,
     ffi::CString,
@@ -14,11 +12,8 @@ use std::{
     io::Write,
     num::NonZero,
     pin::Pin,
-    process::Command,
     ptr,
-    str::FromStr,
-    sync::{mpsc::Sender, Arc},
-    time::Instant,
+    sync::Arc,
 };
 
 use anyhow::{bail, Result};
@@ -32,8 +27,8 @@ use iroh::{
     protocol::ProtocolHandler,
     NodeAddr, NodeId, SecretKey,
 };
-use iroh_topic_tracker::topic_tracker::{self, TopicTracker};
-use nix::libc::{self, execv};
+use iroh_topic_tracker::topic_tracker::TopicTracker;
+use nix::libc::{self};
 use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
 use rand::rngs::OsRng;
 use reqwest::{Method, StatusCode};
@@ -322,7 +317,6 @@ impl Builder {
             .spawn()
             .await?;
 
-
         Ok(patcher._spawn().await?)
     }
 }
@@ -392,16 +386,11 @@ impl Patcher {
     }
 }
 trait TPatcher: Sized {
-    fn with_endpoint(
-        trusted_key: &[u8; PUBLIC_KEY_LENGTH],
-        endpoint: &Endpoint,
-        topic_tracker: &TopicTracker,
-    ) -> Self;
     fn with_latest_version(
         trusted_key: &[u8; PUBLIC_KEY_LENGTH],
         endpoint: &Endpoint,
         topic_tracker: &TopicTracker,
-        SignedPacket: Option<SignedPacket>,
+        signed_packet: Option<SignedPacket>,
         latest_version: VersionTracker,
     ) -> Self;
     async fn _spawn(self) -> Result<Self>;
@@ -418,20 +407,6 @@ trait TPatcher: Sized {
 }
 
 impl TPatcher for Patcher {
-    fn with_endpoint(
-        trusted_key: &[u8; PUBLIC_KEY_LENGTH],
-        endpoint: &Endpoint,
-        topic_tracker: &TopicTracker,
-    ) -> Self {
-        Self::with_latest_version(
-            trusted_key,
-            endpoint,
-            topic_tracker,
-            None,
-            VersionTracker::new(trusted_key),
-        )
-    }
-
     fn with_latest_version(
         trusted_key: &[u8; PUBLIC_KEY_LENGTH],
         endpoint: &Endpoint,
@@ -462,7 +437,7 @@ impl TPatcher for Patcher {
                     let version_tracker = { me.inner.latest_version.lock().await.clone() };
                     if version_tracker.version_info().is_some() && version_tracker.data().is_some()
                     {
-                        let res = me.publish_pkarr().await;
+                        let _ = me.publish_pkarr().await;
                         //println!("pub: {:?}",res);
                     }
                     sleep(PKARR_PUBLISHING_INTERVAL).await;
@@ -499,7 +474,7 @@ impl TPatcher for Patcher {
                                 {
                                     // Same packet as last time (no update)
                                     println!("no update"); //, {:?}",me.inner.latest_version.lock().await.version_info());
-                                    let a = self.publish_trusted_pkarr().await;
+                                    let _ = self.publish_trusted_pkarr().await;
                                     sleep(PKARR_PUBLISHING_INTERVAL).await;
                                     continue;
                                 }
@@ -551,7 +526,7 @@ impl TPatcher for Patcher {
                     }
 
                     //println!("Publishing pkrarrar");
-                    let a = self.publish_trusted_pkarr().await;
+                    let _ = self.publish_trusted_pkarr().await;
                     //println!("published trusted: {a:?}");
 
                     sleep(PKARR_PUBLISHING_INTERVAL).await;
@@ -572,32 +547,32 @@ impl TPatcher for Patcher {
             async move {
                 loop {
                     tokio::select! {
-                        Some(potential_update) = trusted_update_notifier.recv() => {
+                        Some(trusted_potential_update) = trusted_update_notifier.recv() => {
                             println!(
                                 "RCs: {}",
-                                potential_update.version.to_string()
+                                trusted_potential_update.version.to_string()
                             );
-                            if my_version < potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
+                            if my_version < trusted_potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
                                 println!("Starting to update!");
-                                match me.clone().update(potential_update).await {
+                                match me.clone().update(trusted_potential_update).await {
                                     Ok(_) => {
                                     }
-                                    Err(err) => println!("Update attempt failed: "),
+                                    Err(_) => println!("Update attempt failed: "),
                                 }
                             }
                         }
-                        Some(potential_update) = tracker_update_notifier.recv() => {
+                        Some(tracker_potential_update) = tracker_update_notifier.recv() => {
                             println!(
                                 "RCs: {}",
-                                potential_update.version.to_string()
+                                tracker_potential_update.version.to_string()
                             );
-                            if my_version < potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
+                            if my_version < tracker_potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
                                 println!("Starting to update!");
-                                match me.clone().update(potential_update).await {
+                                match me.clone().update(tracker_potential_update).await {
                                     Ok(_) => {
                                         println!("Update successfull")
                                     }
-                                    Err(err) => println!("Update attempt failed: "),
+                                    Err(_) => println!("Update attempt failed: "),
                                 }
                             }
                         }
@@ -630,7 +605,7 @@ impl TPatcher for Patcher {
                     println!("New version downloaded");
                     return Ok(());
                 }
-                Err(err) => {
+                Err(_) => {
                     println!("New version download failed: ");
                     let mut lt = self.inner.latest_version.lock().await;
                     lt.rm_node_id(&node_id.as_bytes());
@@ -655,7 +630,7 @@ impl TPatcher for Patcher {
                                 }
                             });
                         }
-                        Err(err) => {
+                        Err(_) => {
                             println!("Failed to connect");
                         }
                     }
@@ -683,7 +658,7 @@ impl TPatcher for Patcher {
                     let node_ids = me.clone().topic_tracker_update().await;
                     if let Ok(node_ids) = node_ids {
                         for node_id in node_ids {
-                            if let Ok((vi, sp)) = me.resolve_pkarr(&node_id.as_bytes()).await {
+                            if let Ok((vi, _)) = me.resolve_pkarr(&node_id.as_bytes()).await {
                                 let _ = tx.send(vi).await;
                             }
                         }
@@ -810,7 +785,7 @@ impl TPatcherIroh for Patcher {
                 println!("After data received and lv overwrite pkarr published");
             }
             Protocol::DataUnavailable => {}
-            other => {
+            _ => {
                 println!("update - illegal msg: ");
                 bail!("illegal message received")
             }
@@ -1039,7 +1014,7 @@ impl TPatcherPkarr for Patcher {
         
         // Pkarr Relay server
         let req_client = reqwest::ClientBuilder::new().build()?;
-        let mut packet_bytes: Vec<u8> = signed_packet.as_bytes()[32..].to_vec();
+        let packet_bytes: Vec<u8> = signed_packet.as_bytes()[32..].to_vec();
 
         if let Ok(resp) = req_client
             .request(
