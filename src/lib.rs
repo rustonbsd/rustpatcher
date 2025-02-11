@@ -165,7 +165,7 @@ impl Builder {
     }
 
     async fn publish(self) -> anyhow::Result<()> {
-        let version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+        let version = Version::from_str(option_env!("APP_VERSION").unwrap())?;
         let file_path = std::env::current_exe()?;
         let mut file = File::open(file_path).await?;
         let mut buf = vec![];
