@@ -9,7 +9,7 @@ pub fn main(_args: TokenStream, input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         const _: () = {
-            set_app_version(#version)
+            rustpatcher::version_embed::set_app_version(#version)
                 .expect("Failed to initialize version");
         };
 
