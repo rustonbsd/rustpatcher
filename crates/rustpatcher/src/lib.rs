@@ -910,6 +910,7 @@ impl TPatcherIroh for Patcher {
             .await
             .add_node_id(remote_node_id.as_bytes());
 
+        send.finish()?;
         Ok(())
     }
 }
