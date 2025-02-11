@@ -1,53 +1,16 @@
-[package]
-name = "rustpatcher"
-version = "0.4.15"
-edition = "2021"
-authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
-description = "p2p patching system"
-license = "MIT"
-repository = "https://github.com/rustonbsd/rustpatcher"
-readme = "README.md"
-keywords = ["networking"]
-categories = ["network-programming"]
+[workspace]
+resolver = "2"
+members = [
+    "crates/macros",
+    "crates/rustpatcher",
+]
 
-[dependencies]
-iroh = "0.31"
-iroh-topic-tracker = {version = "0.1.11" }
-tokio ={ version="1",features = ["full"] }
-anyhow = "1"
-rand = "0.8.0"
-serde = {version = "1", features = ["derive"]}
-serde_json = "1"
-serde_bytes = "0.11"
-bytes = { version = "1.7", features = ["serde"] }
-ed25519-dalek = { version = "2.0.0", features = ["serde", "rand_core"] }
-postcard = { version = "1", default-features = false, features = ["alloc", "use-std", "experimental-derive"] }
-futures-lite = "2.6.0"
-z32 = "1"
-sha2 = "0.10"
-pkarr = "2"
-clap = { version = "4.4.8", features = ["derive"] }
-tempfile = "3"
-self-replace = "1"
-nix = { version = "0.29", features = ["process"] }
-reqwest = "0.12"
-dotenv = "0.15"
-
-[build-dependencies]
-cargo_metadata = "0.19.1"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
-
-[features]
-default = []
-
-[profile.dev]
-opt-level = 0
-features = []
+default-members = [
+    "crates/macros",
+    "crates/rustpatcher",
+]
 
 [profile.release]
-opt-level = 3
-lto = true
 panic = "abort"
-features = []
+debug = true
+lto = "thin"

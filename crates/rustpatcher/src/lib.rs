@@ -1,5 +1,6 @@
 pub mod data;
 pub mod utils;
+pub mod version_embed;
 
 use std::{
     any::Any,
@@ -45,9 +46,7 @@ use tokio::{
     time::sleep,
 };
 use utils::{
-    compute_hash, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME,
-    PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME,
-    SECRET_KEY_NAME,
+    compute_hash, get_app_version, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME
 };
 
 use crate::utils::wait_for_relay;
@@ -165,7 +164,7 @@ impl Builder {
     }
 
     async fn publish(self) -> anyhow::Result<()> {
-        let version = Version::from_str(env!("APP_VERSION"))?;
+        let version = get_app_version()?;
         let file_path = std::env::current_exe()?;
         let mut file = File::open(file_path).await?;
         let mut buf = vec![];
@@ -357,7 +356,7 @@ impl Patcher {
 
     pub async fn update_available(self) -> Result<bool> {
         let lv = self.inner.latest_version.lock().await.clone();
-        let version = Version::from_str(env!("APP_VERSION"))?;
+        let version = get_app_version()?;
         let patcher_version = lv.version_info();
 
         Ok(patcher_version.is_some() && version < patcher_version.unwrap().version)
@@ -565,7 +564,7 @@ impl TPatcher for Patcher {
         mut trusted_update_notifier: Receiver<VersionInfo>,
         mut tracker_update_notifier: Receiver<VersionInfo>,
     ) -> Result<()> {
-        let my_version = Version::from_str(env!("APP_VERSION"))?;
+        let my_version = get_app_version()?;
         tokio::spawn({
             let me = self.clone();
             async move {

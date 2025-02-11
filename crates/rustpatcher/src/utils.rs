@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, time::Duration};
+use std::{io::SeekFrom, str::FromStr, time::Duration};
 
 use anyhow::bail;
 use iroh::Endpoint;
@@ -9,6 +9,8 @@ use tokio::{
     fs::{create_dir, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
+
+use crate::data::Version;
 
 pub const PUBLISHER_TRUSTED_KEY_NAME: &str = "trusted_key";
 pub const PUBLISHER_SIGNING_KEY_NAME: &str = "publisher_signing_key";
@@ -123,4 +125,8 @@ pub fn compute_hash(data: &[u8]) -> [u8; 32] {
     let mut buf = [0u8; 32];
     buf.copy_from_slice(&hasher.finalize());
     buf
+}
+
+pub fn get_app_version()->anyhow::Result<Version> {
+    Version::from_str(super::version_embed::get_app_version())
 }
