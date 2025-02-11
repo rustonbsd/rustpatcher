@@ -644,8 +644,8 @@ impl TPatcher for Patcher {
                     println!("New version downloaded");
                     return Ok(());
                 }
-                Err(_) => {
-                    println!("New version download failed: ");
+                Err(err) => {
+                    println!("New version download failed: {err:?}");
                     let mut lt = self.inner.latest_version.lock().await;
                     lt.rm_node_id(&node_id.as_bytes());
                 }
