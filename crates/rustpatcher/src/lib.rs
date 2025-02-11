@@ -2,6 +2,8 @@ pub mod data;
 pub mod utils;
 pub mod version_embed;
 
+pub use rustpatcher_macros::main;
+
 use std::{
     any::Any,
     clone,
