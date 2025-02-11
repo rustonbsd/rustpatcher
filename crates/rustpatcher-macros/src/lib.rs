@@ -11,7 +11,7 @@ pub fn main(_args: TokenStream, input: TokenStream) -> TokenStream {
         // Create a static initializer that runs before main
         #[ctor::ctor]
         fn __init_version() {
-            rustpatcher::__set_version(#version);
+            rustpatcher::version_embed::__set_version(#version);
         }
 
         #input_fn
