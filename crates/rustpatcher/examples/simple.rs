@@ -6,8 +6,11 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().expect("dotenv failed to load");
+    let v_string = env!("CARGO_PKG_VERSION").to_string().clone();
+    rustpatcher::version_embed::__set_version(Box::leak(v_string.into_boxed_str()));
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str("ewkijs9aynd1gxp8bd7y73qkc7maqc8qh1j8kej9dumuwr9cq7by")
+        .trusted_key_from_z32_str("mqgmpxe8nkbge73kzbw9jw96j676xa84ot781cwy8aij9i67ppzo")
+        .shared_secret_key_from_z32_str("wqnwmgkb8i6fqtj55qzs499kq495oezw3j1xxz58igijztpkyjcy")
         .build()
         .await?;
 

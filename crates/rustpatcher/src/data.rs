@@ -233,17 +233,18 @@ impl VersionTracker {
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
-struct AuthRequest {
-    sign_request: Bytes,
+pub struct AuthRequest {
+    pub sign_request: Bytes,
 }
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
-struct Auth {
-    signature: Signature,
+pub struct Auth {
+    pub signature: Signature,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Protocol {
+    Ready,
     AuthRequest(AuthRequest),
     Request(Auth),
     Data(VersionInfo, Bytes),
@@ -256,6 +257,7 @@ pub struct Patcher {
     pub trusted_key: [u8; PUBLIC_KEY_LENGTH],
     pub(crate) secret_key: [u8; SECRET_KEY_LENGTH],
     pub(crate) public_key: [u8; PUBLIC_KEY_LENGTH],
+    pub(crate) shared_secret_key: [u8; SECRET_KEY_LENGTH],
     pub(crate) inner: Inner,
 }
 

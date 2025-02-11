@@ -5,20 +5,12 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min,
-    env,
-    ffi::CString,
-    future::Future,
-    io::Write,
-    num::NonZero,
-    pin::Pin,
-    ptr,
-    sync::Arc,
+    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc,
 };
 
 use anyhow::{bail, Result};
 use bytes::Bytes;
-use data::{Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
+use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
     ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
@@ -30,7 +22,7 @@ use iroh::{
 use iroh_topic_tracker::topic_tracker::TopicTracker;
 use nix::libc::{self};
 use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
-use rand::rngs::OsRng;
+use rand::{rngs::OsRng, Rng};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -43,7 +35,9 @@ use tokio::{
     time::sleep,
 };
 use utils::{
-    compute_hash, get_app_version, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME
+    compute_hash, get_app_version, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE,
+    LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME,
+    PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME, SHARED_SECRET_KEY_NAME,
 };
 
 use crate::utils::wait_for_relay;
@@ -52,6 +46,7 @@ use crate::utils::wait_for_relay;
 pub struct Builder {
     secret_key: [u8; SECRET_KEY_LENGTH],
     trusted_key: Option<[u8; PUBLIC_KEY_LENGTH]>,
+    shared_secret_key: Option<[u8; SECRET_KEY_LENGTH]>,
     load_latest_version_from_file: bool,
     load_secret_key_from_file: bool,
     master_node: bool,
@@ -62,6 +57,7 @@ impl Builder {
     pub fn new() -> Self {
         Self {
             secret_key: SecretKey::generate(rand::rngs::OsRng).to_bytes(),
+            shared_secret_key: None,
             trusted_key: None,
             load_latest_version_from_file: true,
             load_secret_key_from_file: true,
@@ -85,6 +81,11 @@ impl Builder {
         self
     }
 
+    pub fn shared_secret_key(mut self, shared_secret_key: &[u8; SECRET_KEY_LENGTH]) -> Self {
+        self.shared_secret_key = Some(*shared_secret_key);
+        self
+    }
+
     pub fn trusted_key_from_z32_str(mut self, trusted_key: &str) -> Self {
         let tk = z32::decode(trusted_key.as_bytes());
         if tk.is_err() {
@@ -94,6 +95,18 @@ impl Builder {
         let mut trusted_key_buf = [0u8; PUBLIC_KEY_LENGTH];
         trusted_key_buf.copy_from_slice(tk.unwrap().as_slice());
         self.trusted_key = Some(trusted_key_buf);
+        self
+    }
+
+    pub fn shared_secret_key_from_z32_str(mut self, shared_secret_key: &str) -> Self {
+        let sk = z32::decode(shared_secret_key.as_bytes());
+        if sk.is_err() {
+            return self;
+        }
+
+        let mut shared_secret_key_buf = [0u8; PUBLIC_KEY_LENGTH];
+        shared_secret_key_buf.copy_from_slice(sk.unwrap().as_slice());
+        self.shared_secret_key = Some(shared_secret_key_buf);
         self
     }
 
@@ -137,6 +150,19 @@ impl Builder {
             }
         };
 
+        let shared_key = {
+            if let Ok(secret_key) = SecretKey::from_file(SHARED_SECRET_KEY_NAME).await {
+                SigningKey::from_bytes(&secret_key.to_bytes())
+            } else {
+                let mut csprng = OsRng;
+                let signing_key = SigningKey::generate(&mut csprng);
+
+                // persist generated keys
+                signing_key.clone().to_file(SHARED_SECRET_KEY_NAME).await?;
+                signing_key
+            }
+        };
+
         println!("");
         println!("");
         println!("New Signing key generated in ./patcher/publisher_signing_key!");
@@ -145,14 +171,18 @@ impl Builder {
             "   Trusted-Key = {}",
             z32::encode(publisher_signing_key.verifying_key().as_bytes())
         );
+        println!("   Shared-Secret = {}", z32::encode(shared_key.as_bytes()));
         println!("");
         println!("Insert the new trusted key into the patcher builder:");
         println!("");
         println!(
             r#"let patcher = Patcher::new()
-    .trusted_key_from_z32_str("INSERT TRUSTED KEY HERE")
+    .trusted_key_from_z32_str("{}")
+    .shared_secret_key_from_z32_str("{}")
     .build()
-    .await?;"#
+    .await?;"#,
+            z32::encode(publisher_signing_key.verifying_key().as_bytes()),
+            z32::encode(shared_key.as_bytes())
         );
         println!("");
         println!("");
@@ -244,6 +274,9 @@ impl Builder {
         if self.trusted_key.is_none() {
             bail!("trusted key required")
         }
+        if self.shared_secret_key.is_none() {
+            bail!("shared secret key required")
+        }
 
         if self.load_secret_key_from_file {
             if let Ok(secret_key) = SecretKey::from_file(SECRET_KEY_NAME).await {
@@ -262,8 +295,9 @@ impl Builder {
         }
 
         if let Ok(bytes) = Vec::from_file(LAST_TRUSTED_PACKAGE).await {
-            self.trusted_packet = Some(SignedPacket::from_bytes(&Bytes::copy_from_slice(bytes.as_slice()))?);
-
+            self.trusted_packet = Some(SignedPacket::from_bytes(&Bytes::copy_from_slice(
+                bytes.as_slice(),
+            ))?);
         }
 
         // Iroh setup
@@ -281,37 +315,40 @@ impl Builder {
             if latest_version.is_ok() {
                 let latest_version = latest_version.unwrap();
                 if self.master_node {
-                    self.trusted_packet = Some(latest_version.as_signed_packet(&self.secret_key).await?);
+                    self.trusted_packet =
+                        Some(latest_version.as_signed_packet(&self.secret_key).await?);
                     println!("master mode");
                 }
                 Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
+                    &self.shared_secret_key.unwrap(),
                     &endpoint,
                     &topic_tracker,
                     self.trusted_packet.clone(),
                     latest_version,
                 )
             } else {
-
                 let me = Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
+                    &self.shared_secret_key.unwrap(),
                     &endpoint,
                     &topic_tracker,
                     self.trusted_packet.clone(),
                     VersionTracker::new(&self.trusted_key.unwrap()),
                 );
-            me
+                me
             }
         } else {
             Patcher::with_latest_version(
                 &self.trusted_key.unwrap(),
+                &self.shared_secret_key.unwrap(),
                 &endpoint,
                 &topic_tracker,
                 self.trusted_packet.clone(),
                 VersionTracker::new(&self.trusted_key.unwrap()),
             )
         };
-        
+
         let _router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(Patcher::ALPN, patcher.clone())
             .spawn()
@@ -334,7 +371,7 @@ impl Patcher {
     pub async fn persist(&self) -> anyhow::Result<()> {
         let inner = self.inner.clone();
         let lv = inner.latest_version.lock().await.clone();
-        println!("persist: {:?}",lv.to_file(LATEST_VERSION_NAME).await);
+        println!("persist: {:?}", lv.to_file(LATEST_VERSION_NAME).await);
 
         let secret_key = self.secret_key.clone();
         secret_key.to_file(SECRET_KEY_NAME).await?;
@@ -388,6 +425,7 @@ impl Patcher {
 trait TPatcher: Sized {
     fn with_latest_version(
         trusted_key: &[u8; PUBLIC_KEY_LENGTH],
+        shared_secret_key: &[u8; SECRET_KEY_LENGTH],
         endpoint: &Endpoint,
         topic_tracker: &TopicTracker,
         signed_packet: Option<SignedPacket>,
@@ -409,6 +447,7 @@ trait TPatcher: Sized {
 impl TPatcher for Patcher {
     fn with_latest_version(
         trusted_key: &[u8; PUBLIC_KEY_LENGTH],
+        shared_secret_key: &[u8; SECRET_KEY_LENGTH],
         endpoint: &Endpoint,
         topic_tracker: &TopicTracker,
         signed_packet: Option<SignedPacket>,
@@ -416,6 +455,7 @@ impl TPatcher for Patcher {
     ) -> Self {
         let me = Self {
             trusted_key: trusted_key.clone(),
+            shared_secret_key: shared_secret_key.clone(),
             inner: Inner {
                 endpoint: endpoint.clone(),
                 topic_tracker: topic_tracker.clone(),
@@ -503,7 +543,6 @@ impl TPatcher for Patcher {
                                     drop(signed_packet);
                                     let _ = self.persist().await;
                                     println!("Signed packet replaced");
-
                                 }
                             }
 
@@ -626,7 +665,8 @@ impl TPatcher for Patcher {
                             tokio::spawn({
                                 let me3 = me2.clone();
                                 async move {
-                                    let _ = me3.accept_handler(conn).await;
+                                    let res = me3.accept_handler(conn).await;
+                                    println!("accept - {res:?}");
                                 }
                             });
                         }
@@ -735,7 +775,10 @@ impl TPatcherIroh for Patcher {
             //println!("pkrr res: ");
             let me_version_info = self.inner.latest_version.lock().await.version_info();
             // if we dont have an inner version update
-            println!("try_update: me version info: is_some == {}",me_version_info.is_some());
+            println!(
+                "try_update: me version info: is_some == {}",
+                me_version_info.is_some()
+            );
             if me_version_info.is_some()
                 && node_version_info.version <= me_version_info.unwrap().version
             {
@@ -755,13 +798,24 @@ impl TPatcherIroh for Patcher {
             .connect(NodeAddr::new(node_id), Self::ALPN)
             .await?;
 
-        println!("update: connected to {}", z32::encode(node_id.as_bytes()));
         let (mut send, mut recv) = conn.open_bi().await?;
+        println!("update: connected to {}", z32::encode(node_id.as_bytes()));
 
-        let msg = Protocol::Request;
-        //Self::send_msg(msg, &mut send).await?;
-        Self::send_msg(msg, &mut send).await?;
+        Self::send_msg(Protocol::Ready, &mut send).await?;
 
+        // 1 . Receive auth token to sign with shared key
+        match Self::recv_msg(&mut recv).await? {
+            Protocol::AuthRequest(auth_request) => {
+                let mut key = SigningKey::from_bytes(&self.shared_secret_key);
+                let request = Protocol::Request(Auth {
+                    signature: key.sign(&auth_request.sign_request),
+                });
+                Self::send_msg(request, &mut send).await?
+            }
+            _ => bail!("expected auth request got something different"),
+        }
+
+        // Await data request after successfull auth
         match Self::recv_msg(&mut recv).await? {
             Protocol::Data(version_info, data) => {
                 println!("update: data received: {}", data.len());
@@ -786,12 +840,13 @@ impl TPatcherIroh for Patcher {
             }
             Protocol::DataUnavailable => {}
             _ => {
-                println!("update - illegal msg: ");
+                println!("update - illegal msg or auth failure");
                 bail!("illegal message received")
             }
         };
 
         Self::send_msg(Protocol::Done, &mut send).await?;
+
         //Self::recv_msg(&mut recv).await?;
         Ok(())
     }
@@ -799,47 +854,62 @@ impl TPatcherIroh for Patcher {
     async fn accept_handler(&self, conn: Connecting) -> Result<()> {
         let connection = conn.await?;
         let remote_node_id = iroh::endpoint::get_remote_node_id(&connection)?;
+
+        println!("accept - splitting streams");
+        let (mut send, mut recv) = connection.accept_bi().await?;
         println!(
             "accept - new connection accepted: {}",
             z32::encode(remote_node_id.as_bytes())
         );
 
-        let (mut send, mut recv) = connection.accept_bi().await?;
-        let msg = Self::recv_msg(&mut recv).await;
-        //println!("accepted - Raw:msg: {msg:?}");
-        let msg = msg?;
-        println!("accepted - First recv");
-
-        match msg {
-            Protocol::Request => {
-                println!("accept - Request");
-                let latest_vt = { self.inner.latest_version.lock().await.clone() };
-
-                if latest_vt.version_info().is_none() {
-                    println!("accept - Data unavailable");
-                    Self::send_msg(Protocol::DataUnavailable, &mut send).await?;
-                    //Self::send_msg(Protocol::Done, &mut send).await?;
-                    return Ok(());
-                }
-                let resp =
-                    Protocol::Data(latest_vt.version_info().unwrap(), latest_vt.data().unwrap());
-
-                Self::send_msg(resp, &mut send).await?;
-                //Self::send_msg(Protocol::Done, &mut send).await?;
-                Self::recv_msg(&mut recv).await?;
-
-                self.inner
-                    .latest_version
-                    .lock()
-                    .await
-                    .add_node_id(remote_node_id.as_bytes());
-            }
-            _ => {
-                bail!("Illegal request");
-            }
+        match Self::recv_msg(&mut recv).await? {
+            Protocol::Ready => {println!("accept - starting auth")},
+            _ => bail!("illegal command"),
         };
 
-        send.finish()?;
+        // 1 . Send auth request
+        let token = rand::thread_rng().gen::<[u8; 32]>();
+        let auth_req = Protocol::AuthRequest(AuthRequest {
+            sign_request: token.to_vec().into(),
+        });
+        Self::send_msg(auth_req, &mut send).await?;
+
+        // 2 . recv auth token signed with shared key
+        let request = Self::recv_msg(&mut recv).await?;
+        match request {
+            Protocol::Request(auth) => {
+                let key = SigningKey::from_bytes(&self.shared_secret_key);
+                if key.verify(&token, &auth.signature).is_err() {
+                    println!("auth failure");
+                    bail!("authentication failed")
+                }
+            }
+            _ => bail!("Illegal request"),
+        };
+
+        // 3 . after auth confirmation send data
+        println!("accepted - auth successfull");
+        println!("accept - sending data...");
+        let latest_vt = { self.inner.latest_version.lock().await.clone() };
+
+        if latest_vt.version_info().is_none() {
+            println!("accept - Data unavailable");
+            Self::send_msg(Protocol::DataUnavailable, &mut send).await?;
+            //Self::send_msg(Protocol::Done, &mut send).await?;
+            return Ok(());
+        }
+        let resp = Protocol::Data(latest_vt.version_info().unwrap(), latest_vt.data().unwrap());
+
+        Self::send_msg(resp, &mut send).await?;
+        //Self::send_msg(Protocol::Done, &mut send).await?;
+        Self::recv_msg(&mut recv).await?;
+
+        self.inner
+            .latest_version
+            .lock()
+            .await
+            .add_node_id(remote_node_id.as_bytes());
+
         Ok(())
     }
 }
@@ -852,8 +922,15 @@ trait TPatcherPkarr: Sized {
     fn publish_pkarr(&self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
     fn publish_trusted_pkarr(&self)
         -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
-    fn pkarr_dht_relay_switch_get(&self,public_key: &[u8; PUBLIC_KEY_LENGTH]) -> impl std::future::Future<Output = Result<Option<SignedPacket>>> + Send;
-    fn pkarr_dht_relay_switch_put(&self,public_key: &[u8; PUBLIC_KEY_LENGTH],signed_packet: SignedPacket) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn pkarr_dht_relay_switch_get(
+        &self,
+        public_key: &[u8; PUBLIC_KEY_LENGTH],
+    ) -> impl std::future::Future<Output = Result<Option<SignedPacket>>> + Send;
+    fn pkarr_dht_relay_switch_put(
+        &self,
+        public_key: &[u8; PUBLIC_KEY_LENGTH],
+        signed_packet: SignedPacket,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 impl TPatcherPkarr for Patcher {
@@ -861,7 +938,6 @@ impl TPatcherPkarr for Patcher {
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],
     ) -> anyhow::Result<(VersionInfo, SignedPacket)> {
-        
         match self.pkarr_dht_relay_switch_get(public_key).await {
             Ok(Some(pkg)) => {
                 let packet = pkg.packet();
@@ -891,7 +967,10 @@ impl TPatcherPkarr for Patcher {
         //println!("Signed packet: {}",signed_packet.is_some());
         if let Some(signed_packet) = signed_packet {
             //println!("publish attempt: {:?}", signed_packet.packet());
-            return match self.pkarr_dht_relay_switch_put(&self.trusted_key,signed_packet).await {
+            return match self
+                .pkarr_dht_relay_switch_put(&self.trusted_key, signed_packet)
+                .await
+            {
                 Ok(_) => Ok(()),
                 Err(err) => bail!("bail {}", err),
             };
@@ -953,21 +1032,27 @@ impl TPatcherPkarr for Patcher {
             30,
             dns::rdata::RData::TXT(trusted_key.as_str().try_into()?),
         ));
-        
+
         let keypair = Keypair::from_secret_key(&self.secret_key);
         let signed_packet = SignedPacket::from_packet(&keypair, &packet)?;
 
-        match self.pkarr_dht_relay_switch_put(&self.public_key,signed_packet).await {
-            Ok(_) => {},
+        match self
+            .pkarr_dht_relay_switch_put(&self.public_key, signed_packet)
+            .await
+        {
+            Ok(_) => {}
             Err(err) => {
                 println!("pkarr pub: {err}");
-            },
+            }
         };
 
         Ok(())
     }
-    
-    async fn pkarr_dht_relay_switch_get(&self,public_key: &[u8; PUBLIC_KEY_LENGTH]) -> Result<Option<SignedPacket>> {
+
+    async fn pkarr_dht_relay_switch_get(
+        &self,
+        public_key: &[u8; PUBLIC_KEY_LENGTH],
+    ) -> Result<Option<SignedPacket>> {
         let mut signed_package = None;
 
         // Pkarr Relay server
@@ -986,9 +1071,9 @@ impl TPatcherPkarr for Patcher {
                         let mut temp = public_key.to_vec();
                         temp.extend_from_slice(&content);
                         &bytes::Bytes::from_owner(temp)
-                    }){
+                    }) {
                         println!("PKARR GET RELAY");
-                        return Ok(Some(_signed_package))
+                        return Ok(Some(_signed_package));
                     }
                 }
             }
@@ -1005,13 +1090,15 @@ impl TPatcherPkarr for Patcher {
 
             println!("PKARR GET DHT");
         }
-    
 
         Ok(signed_package)
     }
-    
-    async fn pkarr_dht_relay_switch_put(&self,public_key: &[u8; PUBLIC_KEY_LENGTH],signed_packet: SignedPacket) -> Result<()> {
-        
+
+    async fn pkarr_dht_relay_switch_put(
+        &self,
+        public_key: &[u8; PUBLIC_KEY_LENGTH],
+        signed_packet: SignedPacket,
+    ) -> Result<()> {
         // Pkarr Relay server
         let req_client = reqwest::ClientBuilder::new().build()?;
         let packet_bytes: Vec<u8> = signed_packet.as_bytes()[32..].to_vec();
@@ -1026,14 +1113,12 @@ impl TPatcherPkarr for Patcher {
             .await
         {
             if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT {
-
                 println!("PKARR PUT RELAY");
-                return Ok(())
+                return Ok(());
             }
             let s = resp.status();
             let text = resp.text().await;
-            println!("resp {:?} {:?}",&text,s);
-            
+            println!("resp {:?} {:?}", &text, s);
         }
 
         // Pkarr dht
@@ -1042,8 +1127,11 @@ impl TPatcherPkarr for Patcher {
             Ok(_) => {
                 println!("PKARR PUT DHT");
                 Ok(())
-            },
-            Err(_) => bail!("dht and relay failed to publish pkarr record for nodeid: {}",z32::encode(public_key)),
+            }
+            Err(_) => bail!(
+                "dht and relay failed to publish pkarr record for nodeid: {}",
+                z32::encode(public_key)
+            ),
         }
     }
 }
