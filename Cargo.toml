@@ -33,6 +33,9 @@ nix = { version = "0.29", features = ["process"] }
 reqwest = "0.12"
 dotenv = "0.15"
 
+[build-dependencies]
+cargo_metadata = "0.19.1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 

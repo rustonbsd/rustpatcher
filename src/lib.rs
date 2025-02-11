@@ -165,7 +165,7 @@ impl Builder {
     }
 
     async fn publish(self) -> anyhow::Result<()> {
-        let version = Version::from_str(option_env!("APP_VERSION").unwrap())?;
+        let version = Version::from_str(env!("APP_VERSION"))?;
         let file_path = std::env::current_exe()?;
         let mut file = File::open(file_path).await?;
         let mut buf = vec![];
@@ -357,7 +357,7 @@ impl Patcher {
 
     pub async fn update_available(self) -> Result<bool> {
         let lv = self.inner.latest_version.lock().await.clone();
-        let version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+        let version = Version::from_str(env!("APP_VERSION"))?;
         let patcher_version = lv.version_info();
 
         Ok(patcher_version.is_some() && version < patcher_version.unwrap().version)
@@ -565,7 +565,7 @@ impl TPatcher for Patcher {
         mut trusted_update_notifier: Receiver<VersionInfo>,
         mut tracker_update_notifier: Receiver<VersionInfo>,
     ) -> Result<()> {
-        let my_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+        let my_version = Version::from_str(env!("APP_VERSION"))?;
         tokio::spawn({
             let me = self.clone();
             async move {
