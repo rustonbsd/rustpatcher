@@ -381,7 +381,7 @@ impl Patcher {
     pub fn ALPN(&self) -> Vec<u8> {
         let shared_key = SigningKey::from_bytes(&self.shared_secret_key);
         let verifying_key = shared_key.verifying_key();
-        verifying_key.as_bytes().to_vec()
+        format!("{}/0",z32::encode(verifying_key.as_bytes())).into_bytes()
         
     }
 
