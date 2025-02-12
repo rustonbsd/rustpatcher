@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use bytes::Bytes;
@@ -267,6 +267,7 @@ pub(crate) struct Inner {
     pub topic_tracker: TopicTracker,
     pub latest_version: Arc<Mutex<VersionTracker>>,
     pub latest_trusted_package: Arc<Mutex<Option<SignedPacket>>>,
+    pub pkarr_publishing_interval: Duration,
 }
 
 pub mod serde_version {

@@ -5,7 +5,7 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc,
+    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc, time::Duration,
 };
 
 use anyhow::{bail, Result};
@@ -51,6 +51,7 @@ pub struct Builder {
     load_secret_key_from_file: bool,
     master_node: bool,
     trusted_packet: Option<SignedPacket>,
+    update_interval: Duration,
 }
 
 impl Builder {
@@ -63,11 +64,17 @@ impl Builder {
             load_secret_key_from_file: true,
             master_node: false,
             trusted_packet: None,
+            update_interval: PKARR_PUBLISHING_INTERVAL,
         }
     }
 
     pub fn load_latest_version_from_file(mut self, val: bool) -> Self {
         self.load_latest_version_from_file = val;
+        self
+    }
+
+    pub fn update_interval(mut self, update_interval: Duration) -> Self {
+        self.update_interval = update_interval;
         self
     }
 
@@ -326,6 +333,7 @@ impl Builder {
                     &topic_tracker,
                     self.trusted_packet.clone(),
                     latest_version,
+                    self.update_interval,
                 )
             } else {
                 let me = Patcher::with_latest_version(
@@ -335,6 +343,7 @@ impl Builder {
                     &topic_tracker,
                     self.trusted_packet.clone(),
                     VersionTracker::new(&self.trusted_key.unwrap()),
+                    self.update_interval,
                 );
                 me
             }
@@ -346,6 +355,7 @@ impl Builder {
                 &topic_tracker,
                 self.trusted_packet.clone(),
                 VersionTracker::new(&self.trusted_key.unwrap()),
+                self.update_interval,
             )
         };
 
@@ -430,6 +440,7 @@ trait TPatcher: Sized {
         topic_tracker: &TopicTracker,
         signed_packet: Option<SignedPacket>,
         latest_version: VersionTracker,
+        pkarr_publishing_interval: Duration,
     ) -> Self;
     async fn _spawn(self) -> Result<Self>;
     async fn _spawn_pkarr_publish(self) -> Result<()>;
@@ -452,15 +463,18 @@ impl TPatcher for Patcher {
         topic_tracker: &TopicTracker,
         signed_packet: Option<SignedPacket>,
         latest_version: VersionTracker,
+        pkarr_publishing_interval: Duration,
     ) -> Self {
         let me = Self {
             trusted_key: trusted_key.clone(),
             shared_secret_key: shared_secret_key.clone(),
             inner: Inner {
+                
                 endpoint: endpoint.clone(),
                 topic_tracker: topic_tracker.clone(),
                 latest_version: Arc::new(Mutex::new(latest_version)),
                 latest_trusted_package: Arc::new(Mutex::new(signed_packet)),
+                pkarr_publishing_interval: pkarr_publishing_interval,
             },
             secret_key: endpoint.secret_key().to_bytes(),
             public_key: endpoint.node_id().as_bytes().clone(),
@@ -480,7 +494,7 @@ impl TPatcher for Patcher {
                         let _ = me.publish_pkarr().await;
                         //println!("pub: {:?}",res);
                     }
-                    sleep(PKARR_PUBLISHING_INTERVAL).await;
+                    sleep(self.inner.pkarr_publishing_interval).await;
                 }
             }
         });
@@ -515,7 +529,7 @@ impl TPatcher for Patcher {
                                     // Same packet as last time (no update)
                                     println!("no update"); //, {:?}",me.inner.latest_version.lock().await.version_info());
                                     let _ = self.publish_trusted_pkarr().await;
-                                    sleep(PKARR_PUBLISHING_INTERVAL).await;
+                                    sleep(self.inner.pkarr_publishing_interval).await;
                                     continue;
                                 }
                             }
@@ -568,7 +582,7 @@ impl TPatcher for Patcher {
                     let _ = self.publish_trusted_pkarr().await;
                     //println!("published trusted: {a:?}");
 
-                    sleep(PKARR_PUBLISHING_INTERVAL).await;
+                    sleep(self.inner.pkarr_publishing_interval).await;
                 }
             }
         });
@@ -703,7 +717,7 @@ impl TPatcher for Patcher {
                             }
                         }
                     }
-                    sleep(PKARR_PUBLISHING_INTERVAL).await
+                    sleep(self.inner.pkarr_publishing_interval).await
                 }
             }
         });
