@@ -358,9 +358,9 @@ impl Builder {
                 self.update_interval,
             )
         };
-
+        
         let _router = iroh::protocol::Router::builder(endpoint.clone())
-            .accept(Patcher::ALPN, patcher.clone())
+            .accept(&patcher.ALPN(), patcher.clone())
             .spawn()
             .await?;
 
@@ -372,10 +372,17 @@ impl Builder {
 struct SigPackage(pub Vec<u8>);
 
 impl Patcher {
-    pub const ALPN: &'static [u8] = b"iroh/patcher/1";
     const MAX_MSG_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
     pub fn new() -> Builder {
         Builder::new()
+    }
+
+    #[allow(non_snake_case)]
+    pub fn ALPN(&self) -> Vec<u8> {
+        let shared_key = SigningKey::from_bytes(&self.shared_secret_key);
+        let verifying_key = shared_key.verifying_key();
+        verifying_key.as_bytes().to_vec()
+        
     }
 
     pub async fn persist(&self) -> anyhow::Result<()> {
@@ -809,7 +816,7 @@ impl TPatcherIroh for Patcher {
         let conn = self
             .inner
             .endpoint
-            .connect(NodeAddr::new(node_id), Self::ALPN)
+            .connect(NodeAddr::new(node_id), &self.ALPN())
             .await?;
 
         let (mut send, mut recv) = conn.open_bi().await?;
