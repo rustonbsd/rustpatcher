@@ -652,7 +652,7 @@ impl TPatcher for Patcher {
         // 1. Find node ids via topic tracker
         let topic_tracker = self.inner.topic_tracker.clone();
         let node_ids = topic_tracker
-            .get_topic_nodes(&new_version_info.to_topic_hash()?)
+            .get_topic_nodes(&new_version_info.to_topic_hash(self.shared_secret_key)?)
             .await?;
         println!("update: found node_ids: {:?}", node_ids);
         for node_id in node_ids.clone() {
@@ -734,7 +734,7 @@ impl TPatcher for Patcher {
     async fn topic_tracker_update(self) -> Result<Vec<iroh::PublicKey>> {
         let lv = self.inner.latest_version.lock().await.clone();
         if let Some(vi) = lv.version_info() {
-            if let Ok(topic_hash) = vi.to_topic_hash() {
+            if let Ok(topic_hash) = vi.to_topic_hash(self.shared_secret_key) {
                 return self.inner.topic_tracker.get_topic_nodes(&topic_hash).await;
             }
         }
