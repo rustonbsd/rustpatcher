@@ -218,14 +218,6 @@ impl VersionTracker {
             30,
             dns::rdata::RData::TXT(hash.as_str().try_into()?),
         ));
-        // TrustedKey
-        let trusted_key = serde_json::to_string(&self.trusted_key)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_trusted_key").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(trusted_key.as_str().try_into()?),
-        ));
 
         let key_pair = Keypair::from_secret_key(secret_key);
 
