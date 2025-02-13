@@ -5,7 +5,8 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc, time::Duration,
+    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{bail, Result};
@@ -251,7 +252,6 @@ impl Builder {
             version,
             hash,
             signature,
-            trusted_key,
         };
         let version_tracker = VersionTracker::load(
             &trusted_key,
@@ -358,7 +358,7 @@ impl Builder {
                 self.update_interval,
             )
         };
-        
+
         let _router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(&patcher.ALPN(), patcher.clone())
             .spawn()
@@ -381,8 +381,7 @@ impl Patcher {
     pub fn ALPN(&self) -> Vec<u8> {
         let shared_key = SigningKey::from_bytes(&self.shared_secret_key);
         let verifying_key = shared_key.verifying_key();
-        format!("{}/0",z32::encode(verifying_key.as_bytes())).into_bytes()
-        
+        format!("{}/0", z32::encode(verifying_key.as_bytes())).into_bytes()
     }
 
     pub async fn persist(&self) -> anyhow::Result<()> {
@@ -476,7 +475,6 @@ impl TPatcher for Patcher {
             trusted_key: trusted_key.clone(),
             shared_secret_key: shared_secret_key.clone(),
             inner: Inner {
-                
                 endpoint: endpoint.clone(),
                 topic_tracker: topic_tracker.clone(),
                 latest_version: Arc::new(Mutex::new(latest_version)),
@@ -884,7 +882,9 @@ impl TPatcherIroh for Patcher {
         );
 
         match Self::recv_msg(&mut recv).await? {
-            Protocol::Ready => {println!("accept - starting auth")},
+            Protocol::Ready => {
+                println!("accept - starting auth")
+            }
             _ => bail!("illegal command"),
         };
 
@@ -967,15 +967,12 @@ impl TPatcherPkarr for Patcher {
                 let version = utils::decode_rdata::<Version>(packet, "_version")?;
                 let hash = utils::decode_rdata::<[u8; PUBLIC_KEY_LENGTH]>(packet, "_hash")?;
                 let signature = utils::decode_rdata::<Signature>(packet, "_signature")?;
-                let trusted_key =
-                    utils::decode_rdata::<[u8; PUBLIC_KEY_LENGTH]>(packet, "_trusted_key")?;
 
                 Ok((
                     VersionInfo {
                         version,
                         hash,
                         signature,
-                        trusted_key,
                     },
                     pkg,
                 ))
@@ -1045,14 +1042,6 @@ impl TPatcherPkarr for Patcher {
             dns::CLASS::IN,
             30,
             dns::rdata::RData::TXT(hash.as_str().try_into()?),
-        ));
-        // TrustedKey
-        let trusted_key = serde_json::to_string(&self.trusted_key)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_trusted_key").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(trusted_key.as_str().try_into()?),
         ));
 
         let keypair = Keypair::from_secret_key(&self.secret_key);

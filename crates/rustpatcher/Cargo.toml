@@ -1,6 +1,6 @@
 [package]
 name = "rustpatcher"
-version = "0.1.6"
+version = "0.1.8"
 edition = "2021"
 authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
 description = "p2p patching system"

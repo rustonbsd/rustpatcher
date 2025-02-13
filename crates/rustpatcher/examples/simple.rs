@@ -9,10 +9,12 @@ async fn main() -> anyhow::Result<()> {
     let v_string = env!("CARGO_PKG_VERSION").to_string().clone();
     rustpatcher::version_embed::__set_version(Box::leak(v_string.into_boxed_str()));
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str("mqgmpxe8nkbge73kzbw9jw96j676xa84ot781cwy8aij9i67ppzo")
-        .shared_secret_key_from_z32_str("wqnwmgkb8i6fqtj55qzs499kq495oezw3j1xxz58igijztpkyjcy")
-        .build()
-        .await?;
+    .update_interval(Duration::from_secs(10))
+    .trusted_key_from_z32_str("qwbu3hmq3haaqqkn5nsbkzpfjbfdy8yxdepxucotasthcxigh5no")
+    .shared_secret_key_from_z32_str("bop3y5rn58tgbcmc938mtah45jaszka88bf9rf1tqqhupu3iwzyy")
+    
+    .build()
+    .await?;
 
     println!("1Paul war hier!");
     println!("2Paul war hier!");

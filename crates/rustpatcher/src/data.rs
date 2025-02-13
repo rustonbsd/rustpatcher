@@ -63,8 +63,6 @@ pub struct VersionInfo {
     pub hash: [u8; 32],
     #[serde(with = "serde_z32_signature")]
     pub signature: Signature,
-    #[serde(with = "serde_z32_array")]
-    pub trusted_key: [u8; PUBLIC_KEY_LENGTH],
 }
 
 impl VersionInfo {
