@@ -1078,11 +1078,7 @@ impl TPatcherPkarr for Patcher {
         {
             if resp.status() == StatusCode::OK {
                 if let Ok(content) = resp.bytes().await {
-                    if let Ok(_signed_package) = SignedPacket::from_bytes({
-                        let mut temp = public_key.to_vec();
-                        temp.extend_from_slice(&content);
-                        &bytes::Bytes::from_owner(temp)
-                    }) {
+                    if let Ok(_signed_package) = SignedPacket::from_bytes(&content) {
                         println!("PKARR GET RELAY");
                         return Ok(Some(_signed_package));
                     }
