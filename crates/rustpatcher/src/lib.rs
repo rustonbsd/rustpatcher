@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use bytes::Bytes;
 use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
-    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    ed25519::signature::SignerMut, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH
 };
 use iroh::{
     endpoint::{Connecting, Endpoint, RecvStream, SendStream},
@@ -1078,7 +1078,8 @@ impl TPatcherPkarr for Patcher {
         {
             if resp.status() == StatusCode::OK {
                 if let Ok(content) = resp.bytes().await {
-                    if let Ok(_signed_package) = SignedPacket::from_bytes(&content) {
+                    let pub_key = PublicKey::try_from(public_key)?;
+                    if let Ok(_signed_package) = SignedPacket::from_relay_payload(&pub_key,&content) {
                         println!("PKARR GET RELAY");
                         return Ok(Some(_signed_package));
                     }
