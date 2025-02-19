@@ -424,10 +424,13 @@ impl Patcher {
         temp_file.write_all(&data)?;
         let path = temp_file.path();
 
-        self_replace::self_replace(path)?;
-
+        // Get exe path before self_replace. 
+        // after: it will add "[..] (deleted)"
+        // to the end of the filename on ubuntu (maybe all linux).
         let exe_raw = std::env::current_exe()?;
         let exe = CString::new(exe_raw.to_str().unwrap())?;
+
+        self_replace::self_replace(path)?;
 
         // The array must be null-terminated.
         let args: [*const libc::c_char; 1] = [ptr::null()];
