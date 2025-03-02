@@ -637,6 +637,7 @@ impl TPatcher for Patcher {
                                 }
                             }
                         }
+                        //todo?
                     }
                 }
             }
@@ -1094,7 +1095,7 @@ impl TPatcherPkarr for Patcher {
         let client = PkarrClient::builder()
             .cache_size(NonZero::new(1).unwrap())
             .build()
-            .unwrap();
+            .unwrap(); //todo
         let pkarr_pk = PublicKey::try_from(public_key)?;
         if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
             signed_package = _signed_package;
@@ -1133,7 +1134,7 @@ impl TPatcherPkarr for Patcher {
         }
 
         // Pkarr dht
-        let client = PkarrClient::builder().build().unwrap();
+        let client = PkarrClient::builder().build().unwrap(); //todo
         match client.publish(&signed_packet) {
             Ok(_) => {
                 println!("PKARR PUT DHT");
