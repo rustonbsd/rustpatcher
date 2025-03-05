@@ -2,7 +2,13 @@
 name = "rustpatcher-macros"
 version = "0.1.0"
 edition = "2021"
-
+authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
+description = "p2p patching system"
+license = "MIT"
+repository = "https://github.com/rustonbsd/rustpatcher"
+readme = "../README.md"
+keywords = ["networking"]
+categories = ["network-programming"]
 [lib]
 proc-macro = true
 
