@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use bytes::Bytes;
 use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
-    ed25519::signature::SignerMut, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH
+    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH
 };
 use iroh::{
     endpoint::{Connecting, Endpoint, RecvStream, SendStream},
@@ -637,7 +637,7 @@ impl TPatcher for Patcher {
                                 }
                             }
                         }
-                        //todo?
+                        //todo
                     }
                 }
             }
