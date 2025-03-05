@@ -6,7 +6,7 @@ authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
 description = "p2p patching system"
 license = "MIT"
 repository = "https://github.com/rustonbsd/rustpatcher"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["networking"]
 categories = ["network-programming"]
 [lib]
