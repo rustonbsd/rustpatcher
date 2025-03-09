@@ -13,7 +13,7 @@ use anyhow::{bail, Result};
 use bytes::Bytes;
 use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
-    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH
+    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use iroh::{
     endpoint::{Connecting, Endpoint, RecvStream, SendStream},
@@ -424,7 +424,7 @@ impl Patcher {
         temp_file.write_all(&data)?;
         let path = temp_file.path();
 
-        // Get exe path before self_replace. 
+        // Get exe path before self_replace.
         // after: it will add "[..] (deleted)"
         // to the end of the filename on ubuntu (maybe all linux).
         let exe_raw = std::env::current_exe()?;
@@ -1083,7 +1083,9 @@ impl TPatcherPkarr for Patcher {
             if resp.status() == StatusCode::OK {
                 if let Ok(content) = resp.bytes().await {
                     let pub_key = PublicKey::try_from(public_key)?;
-                    if let Ok(_signed_package) = SignedPacket::from_relay_payload(&pub_key,&content) {
+                    if let Ok(_signed_package) =
+                        SignedPacket::from_relay_payload(&pub_key, &content)
+                    {
                         println!("PKARR GET RELAY");
                         return Ok(Some(_signed_package));
                     }
@@ -1092,18 +1094,21 @@ impl TPatcherPkarr for Patcher {
         }
 
         // Pkarr dht
-        let client = PkarrClient::builder()
+        if let Ok(client) = PkarrClient::builder()
             .cache_size(NonZero::new(1).unwrap())
-            .build()
-            .unwrap(); //todo
-        let pkarr_pk = PublicKey::try_from(public_key)?;
-        if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
-            signed_package = _signed_package;
+                .build() {
+                
+            let pkarr_pk = PublicKey::try_from(public_key)?;
+            if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
+                signed_package = _signed_package;
 
-            println!("PKARR GET DHT");
+                println!("PKARR GET DHT");
+            }
+
+            Ok(signed_package)
+        } else {
+            bail!("failed to get package by public_key: {}",z32::encode(public_key))
         }
-
-        Ok(signed_package)
     }
 
     async fn pkarr_dht_relay_switch_put(
@@ -1134,16 +1139,22 @@ impl TPatcherPkarr for Patcher {
         }
 
         // Pkarr dht
-        let client = PkarrClient::builder().build().unwrap(); //todo
-        match client.publish(&signed_packet) {
-            Ok(_) => {
-                println!("PKARR PUT DHT");
-                Ok(())
+        if let Ok(client) = PkarrClient::builder().build() {
+            match client.publish(&signed_packet) {
+                Ok(_) => {
+                    println!("PKARR PUT DHT");
+                    Ok(())
+                }
+                Err(_) => bail!(
+                    "dht and relay failed to publish pkarr record for nodeid: {}",
+                    z32::encode(public_key)
+                ),
             }
-            Err(_) => bail!(
+        } else {
+            bail!(
                 "dht and relay failed to publish pkarr record for nodeid: {}",
                 z32::encode(public_key)
-            ),
+            )
         }
     }
 }
