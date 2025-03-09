@@ -43,6 +43,7 @@ fn main() {
 // main.rs
 use rustpatcher::Patcher;
 
+#[rustpatcher::main]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let patcher = Patcher::new()
