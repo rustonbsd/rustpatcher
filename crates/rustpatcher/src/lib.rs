@@ -205,7 +205,7 @@ impl Builder {
         let mut buf = vec![];
         file.read_to_end(&mut buf).await?;
 
-        println!("Version: {version:?}");
+        log::debug!("Version: {version:?}");
 
         let mut publisher_signing_key = {
             if let Ok(secret_key) = SecretKey::from_file(PUBLISHER_SIGNING_KEY_NAME).await {
@@ -261,16 +261,16 @@ impl Builder {
         )?;
         version_tracker.to_file(LATEST_VERSION_NAME).await?;
 
-        println!(
+        log::debug!(
             "Signature validation check: {:?}",
             VersionTracker::verify_data(&trusted_key, &version_info, &buf.clone().into())
         );
 
-        println!("Sig: {}", z32::encode(&signature.to_bytes()));
-        println!("hash: {}", z32::encode(&hash));
-        println!("trusted: {}", z32::encode(&trusted_key));
+        log::debug!("Sig: {}", z32::encode(&signature.to_bytes()));
+        log::debug!("hash: {}", z32::encode(&hash));
+        log::debug!("trusted: {}", z32::encode(&trusted_key));
 
-        println!("Publish successfull!");
+        log::debug!("Publish successfull!");
 
         Ok(())
     }
@@ -296,7 +296,7 @@ impl Builder {
                 {
                     // Master node here
                     self.master_node = true;
-                    println!("Master node");
+                    log::debug!("Master node");
                 }
             }
         }
@@ -324,7 +324,7 @@ impl Builder {
                 if self.master_node {
                     self.trusted_packet =
                         Some(latest_version.as_signed_packet(&self.secret_key).await?);
-                    println!("master mode");
+                    log::debug!("master mode");
                 }
                 Patcher::with_latest_version(
                     &self.trusted_key.unwrap(),
@@ -386,8 +386,6 @@ impl Patcher {
 
     pub async fn persist(&self) -> anyhow::Result<()> {
         let inner = self.inner.clone();
-        let lv = inner.latest_version.lock().await.clone();
-        println!("persist: {:?}", lv.to_file(LATEST_VERSION_NAME).await);
 
         let secret_key = self.secret_key.clone();
         secret_key.to_file(SECRET_KEY_NAME).await?;
@@ -500,7 +498,6 @@ impl TPatcher for Patcher {
                     if version_tracker.version_info().is_some() && version_tracker.data().is_some()
                     {
                         let _ = me.publish_pkarr().await;
-                        //println!("pub: {:?}",res);
                     }
                     sleep(self.inner.pkarr_publishing_interval).await;
                 }
@@ -535,7 +532,7 @@ impl TPatcher for Patcher {
                                         .eq(trusted_signed_packet.as_bytes())
                                 {
                                     // Same packet as last time (no update)
-                                    println!("no update"); //, {:?}",me.inner.latest_version.lock().await.version_info());
+                                    log::debug!("no update"); //, {:?}",me.inner.latest_version.lock().await.version_info());
                                     let _ = self.publish_trusted_pkarr().await;
                                     sleep(self.inner.pkarr_publishing_interval).await;
                                     continue;
@@ -544,8 +541,6 @@ impl TPatcher for Patcher {
 
                             // Different package candidate
 
-                            //println!("trusted_signed_packet: {}",trusted_signed_packet.public_key().to_z32());
-
                             // check if newer version update notifier
                             let lt = me.inner.latest_version.lock().await.clone();
 
@@ -553,7 +548,6 @@ impl TPatcher for Patcher {
                             {
                                 let me_signed_package =
                                     me.inner.latest_trusted_package.lock().await.clone();
-                                //println!("me signed package: {:?}", me_signed_package);
                                 if me_signed_package.is_none()
                                     || (lt.version_info().is_some()
                                         && trusted_version_info.version
@@ -564,7 +558,7 @@ impl TPatcher for Patcher {
                                     *signed_packet = Some(trusted_signed_packet);
                                     drop(signed_packet);
                                     let _ = self.persist().await;
-                                    println!("Signed packet replaced");
+                                    log::debug!("Signed packet replaced");
                                 }
                             }
 
@@ -577,19 +571,19 @@ impl TPatcher for Patcher {
                                     || vtc.version_info().unwrap().version
                                         < trusted_version_info.version
                                 {
-                                    //println!("Send update notification: {:?}",trusted_version_info.version);
+                                    log::debug!(
+                                        "Send update notification: {:?}",
+                                        trusted_version_info.version
+                                    );
                                     let _ = tx.send(trusted_version_info).await;
                                 }
                             }
                         }
                     } else {
-                        //println!("Failed to resolve trusted key!");
+                        log::debug!("Failed to resolve trusted key!");
                     }
 
-                    //println!("Publishing pkrarrar");
                     let _ = self.publish_trusted_pkarr().await;
-                    //println!("published trusted: {a:?}");
-
                     sleep(self.inner.pkarr_publishing_interval).await;
                 }
             }
@@ -609,31 +603,32 @@ impl TPatcher for Patcher {
                 loop {
                     tokio::select! {
                         Some(trusted_potential_update) = trusted_update_notifier.recv() => {
-                            println!(
+                            log::debug!(
                                 "RCs: {}",
                                 trusted_potential_update.version.to_string()
                             );
                             if my_version < trusted_potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
-                                println!("Starting to update!");
+                                log::debug!("Starting to update!");
                                 match me.clone().update(trusted_potential_update).await {
                                     Ok(_) => {
+                                        log::debug!("Update attempt successfull");
                                     }
-                                    Err(_) => println!("Update attempt failed: "),
+                                    Err(_) => log::debug!("Update attempt failed: "),
                                 }
                             }
                         }
                         Some(tracker_potential_update) = tracker_update_notifier.recv() => {
-                            println!(
+                            log::debug!(
                                 "RCs: {}",
                                 tracker_potential_update.version.to_string()
                             );
                             if my_version < tracker_potential_update.version || me.clone().inner.latest_version.lock().await.clone().data().is_none() {
-                                println!("Starting to update!");
+                                log::debug!("Starting to update!");
                                 match me.clone().update(tracker_potential_update).await {
                                     Ok(_) => {
-                                        println!("Update successfull")
+                                        log::debug!("Update successfull")
                                     }
-                                    Err(_) => println!("Update attempt failed: "),
+                                    Err(_) => log::debug!("Update attempt failed: "),
                                 }
                             }
                         }
@@ -649,14 +644,14 @@ impl TPatcher for Patcher {
         // Update
         // 1. Find node ids
         // 2. Try update from node ids
-        println!("update: version {}", new_version_info.version.to_string());
+        log::debug!("update: version {}", new_version_info.version.to_string());
 
         // 1. Find node ids via topic tracker
         let topic_tracker = self.inner.topic_tracker.clone();
         let node_ids = topic_tracker
             .get_topic_nodes(&new_version_info.to_topic_hash(self.shared_secret_key)?)
             .await?;
-        println!("update: found node_ids: {:?}", node_ids);
+        log::debug!("update: found node_ids: {:?}", node_ids);
         for node_id in node_ids.clone() {
             // 2. try and update
             match self
@@ -664,11 +659,11 @@ impl TPatcher for Patcher {
                 .await
             {
                 Ok(_) => {
-                    println!("New version downloaded");
+                    log::debug!("New version downloaded");
                     return Ok(());
                 }
                 Err(err) => {
-                    println!("New version download failed: {err:?}");
+                    log::debug!("New version download failed: {err:?}");
                     let mut lt = self.inner.latest_version.lock().await;
                     lt.rm_node_id(&node_id.as_bytes());
                 }
@@ -689,12 +684,12 @@ impl TPatcher for Patcher {
                                 let me3 = me2.clone();
                                 async move {
                                     let res = me3.accept_handler(conn).await;
-                                    println!("accept - {res:?}");
+                                    log::debug!("accept - {res:?}");
                                 }
                             });
                         }
                         Err(_) => {
-                            println!("Failed to connect");
+                            log::debug!("Failed to connect");
                         }
                     }
                 }
@@ -770,9 +765,9 @@ impl TPatcherIroh for Patcher {
     }
 
     async fn recv_msg(recv: &mut RecvStream) -> Result<Protocol> {
-        println!("starting to recv msg");
+        log::debug!("starting to recv msg");
         let len = recv.read_u64_le().await? as usize;
-        println!("Recv: len: {len}");
+        log::debug!("Recv: len: {len}");
 
         assert!(len <= Self::MAX_MSG_SIZE_BYTES as usize);
 
@@ -792,13 +787,12 @@ impl TPatcherIroh for Patcher {
     }
 
     async fn try_update(self: &mut Self, node_id: NodeId) -> Result<()> {
-        //println!("try update");
+        log::debug!("try update");
         let (node_version_info, _) = self.resolve_pkarr(node_id.as_bytes()).await?;
         {
-            //println!("pkrr res: ");
             let me_version_info = self.inner.latest_version.lock().await.version_info();
             // if we dont have an inner version update
-            println!(
+            log::debug!(
                 "try_update: me version info: is_some == {}",
                 me_version_info.is_some()
             );
@@ -813,7 +807,7 @@ impl TPatcherIroh for Patcher {
         }
 
         wait_for_relay(&self.inner.endpoint).await?;
-        println!("update: got record: {:?}", z32::encode(node_id.as_bytes()));
+        log::debug!("update: got record: {:?}", z32::encode(node_id.as_bytes()));
 
         let conn = self
             .inner
@@ -822,7 +816,7 @@ impl TPatcherIroh for Patcher {
             .await?;
 
         let (mut send, mut recv) = conn.open_bi().await?;
-        println!("update: connected to {}", z32::encode(node_id.as_bytes()));
+        log::debug!("update: connected to {}", z32::encode(node_id.as_bytes()));
 
         Self::send_msg(Protocol::Ready, &mut send).await?;
 
@@ -841,7 +835,7 @@ impl TPatcherIroh for Patcher {
         // Await data request after successfull auth
         match Self::recv_msg(&mut recv).await? {
             Protocol::Data(version_info, data) => {
-                println!("update: data received: {}", data.len());
+                log::debug!("update: data received: {}", data.len());
                 let mut latest_vt = self.inner.latest_version.lock().await;
                 let latest_version_info = latest_vt.version_info();
                 if latest_version_info.is_none()
@@ -859,11 +853,11 @@ impl TPatcherIroh for Patcher {
                 self.persist().await?;
 
                 self.publish_pkarr().await?;
-                println!("After data received and lv overwrite pkarr published");
+                log::debug!("After data received and lv overwrite pkarr published");
             }
             Protocol::DataUnavailable => {}
             _ => {
-                println!("update - illegal msg or auth failure");
+                log::debug!("update - illegal msg or auth failure");
                 bail!("illegal message received")
             }
         };
@@ -878,16 +872,16 @@ impl TPatcherIroh for Patcher {
         let connection = conn.await?;
         let remote_node_id = iroh::endpoint::get_remote_node_id(&connection)?;
 
-        println!("accept - splitting streams");
+        log::debug!("accept - splitting streams");
         let (mut send, mut recv) = connection.accept_bi().await?;
-        println!(
+        log::debug!(
             "accept - new connection accepted: {}",
             z32::encode(remote_node_id.as_bytes())
         );
 
         match Self::recv_msg(&mut recv).await? {
             Protocol::Ready => {
-                println!("accept - starting auth")
+                log::debug!("accept - starting auth")
             }
             _ => bail!("illegal command"),
         };
@@ -905,7 +899,7 @@ impl TPatcherIroh for Patcher {
             Protocol::Request(auth) => {
                 let key = SigningKey::from_bytes(&self.shared_secret_key);
                 if key.verify(&token, &auth.signature).is_err() {
-                    println!("auth failure");
+                    log::debug!("auth failure");
                     bail!("authentication failed")
                 }
             }
@@ -913,20 +907,18 @@ impl TPatcherIroh for Patcher {
         };
 
         // 3 . after auth confirmation send data
-        println!("accepted - auth successfull");
-        println!("accept - sending data...");
+        log::debug!("accepted - auth successfull");
+        log::debug!("accept - sending data...");
         let latest_vt = { self.inner.latest_version.lock().await.clone() };
 
         if latest_vt.version_info().is_none() {
-            println!("accept - Data unavailable");
+            log::debug!("accept - Data unavailable");
             Self::send_msg(Protocol::DataUnavailable, &mut send).await?;
-            //Self::send_msg(Protocol::Done, &mut send).await?;
             return Ok(());
         }
         let resp = Protocol::Data(latest_vt.version_info().unwrap(), latest_vt.data().unwrap());
 
         Self::send_msg(resp, &mut send).await?;
-        //Self::send_msg(Protocol::Done, &mut send).await?;
         Self::recv_msg(&mut recv).await?;
 
         self.inner
@@ -987,9 +979,7 @@ impl TPatcherPkarr for Patcher {
 
     async fn publish_trusted_pkarr(&self) -> anyhow::Result<()> {
         let signed_packet = { self.inner.latest_trusted_package.lock().await.clone() };
-        //println!("Signed packet: {}",signed_packet.is_some());
         if let Some(signed_packet) = signed_packet {
-            //println!("publish attempt: {:?}", signed_packet.packet());
             return match self
                 .pkarr_dht_relay_switch_put(&self.trusted_key, signed_packet)
                 .await
@@ -1057,7 +1047,7 @@ impl TPatcherPkarr for Patcher {
         {
             Ok(_) => {}
             Err(err) => {
-                println!("pkarr pub: {err}");
+                log::debug!("pkarr pub: {err}");
             }
         };
 
@@ -1086,7 +1076,7 @@ impl TPatcherPkarr for Patcher {
                     if let Ok(_signed_package) =
                         SignedPacket::from_relay_payload(&pub_key, &content)
                     {
-                        println!("PKARR GET RELAY");
+                        log::debug!("PKARR GET RELAY");
                         return Ok(Some(_signed_package));
                     }
                 }
@@ -1096,18 +1086,21 @@ impl TPatcherPkarr for Patcher {
         // Pkarr dht
         if let Ok(client) = PkarrClient::builder()
             .cache_size(NonZero::new(1).unwrap())
-                .build() {
-                
+            .build()
+        {
             let pkarr_pk = PublicKey::try_from(public_key)?;
             if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
                 signed_package = _signed_package;
 
-                println!("PKARR GET DHT");
+                log::debug!("PKARR GET DHT");
             }
 
             Ok(signed_package)
         } else {
-            bail!("failed to get package by public_key: {}",z32::encode(public_key))
+            bail!(
+                "failed to get package by public_key: {}",
+                z32::encode(public_key)
+            )
         }
     }
 
@@ -1130,19 +1123,16 @@ impl TPatcherPkarr for Patcher {
             .await
         {
             if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT {
-                println!("PKARR PUT RELAY");
+                log::debug!("PKARR PUT RELAY");
                 return Ok(());
             }
-            let s = resp.status();
-            let text = resp.text().await;
-            println!("resp {:?} {:?}", &text, s);
         }
 
         // Pkarr dht
         if let Ok(client) = PkarrClient::builder().build() {
             match client.publish(&signed_packet) {
                 Ok(_) => {
-                    println!("PKARR PUT DHT");
+                    log::debug!("PKARR PUT DHT");
                     Ok(())
                 }
                 Err(_) => bail!(
