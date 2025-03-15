@@ -106,10 +106,10 @@ sequenceDiagram
    }
    ```
 
-3. **Self-Update Mechanism**  
+3. **Self-Update Mechanism**
+   - Hash and Signature verification after data download
    - Temp file write with atomic replacement  
    - Execv syscall for instant reload  
-   - Rollback on hash mismatch  
 
 ## CLI Reference  
 
