@@ -9,7 +9,7 @@ use pkarr::{dns, Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{utils::{Storage, LAST_REPLY_ID_NAME}, LastReplyId};
+use crate::{utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
 
 #[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
@@ -160,9 +160,9 @@ impl VersionTracker {
         let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
-        //println!("Sig: {}",z32::encode(&sig.to_bytes()));
-        //println!("hash: {}",z32::encode(&compute_hash(&data)));
-        //println!("trusted: {}",z32::encode(trusted_key));
+        log::debug!("Sig: {}",z32::encode(&sig.to_bytes()));
+        log::debug!("hash: {}",z32::encode(&compute_hash(&data)));
+        log::debug!("trusted: {}",z32::encode(trusted_key));
 
         match pub_key.verify(&data, &sig) {
             Ok(_) => Ok(()),
