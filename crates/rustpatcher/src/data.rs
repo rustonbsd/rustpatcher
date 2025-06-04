@@ -9,6 +9,7 @@ use pkarr::{Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+
 use crate::{utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
 
 #[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
@@ -160,9 +161,9 @@ impl VersionTracker {
         let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
-        log::debug!("Sig: {}",z32::encode(&sig.to_bytes()));
-        log::debug!("hash: {}",z32::encode(&compute_hash(&data)));
-        log::debug!("trusted: {}",z32::encode(trusted_key));
+        log::warn!("Sig: {}",z32::encode(&sig.to_bytes()));
+        log::warn!("hash: {}",z32::encode(&compute_hash(&data)));
+        log::warn!("trusted: {}",z32::encode(trusted_key));
 
         match pub_key.verify(&data, &sig) {
             Ok(_) => Ok(()),

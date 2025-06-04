@@ -6,6 +6,8 @@ use tokio::time::sleep;
 //#[rustpatcher::main]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
     let v_string = env!("CARGO_PKG_VERSION").to_string().clone();
 
     // Needed since this is an example of the same crate and not loading as a package
@@ -28,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
     loop {
         sleep(Duration::from_secs(10)).await;
         if patcher.clone().update_available().await? {
+            println!("Update available");
             println!("Updating: {:?}", patcher.clone().try_update().await?);
         }
     }
