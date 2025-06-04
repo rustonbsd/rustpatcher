@@ -14,31 +14,8 @@
 rustpatcher = "0.1"
 ```
 
-### 2. Initialize Cryptographic Identity  
-```bash
-cargo run -- rustpatcher init
-```
-**Output:**  
-```text
-New keys generated:
-  Trusted-Key = mw6iuq1iu7qd5gcz59qpjnu6tw9yn7pn4gxxkdbqwwwxfzyziuro
-  Shared-Secret = 8656fg8j6s43a4jndkzdysjuof588zezsn6s8sd6wwcpwf6b3r9y
 
-Add to build.rs:
-println!("cargo:rustc-env=TRUSTED_KEY=mw6iuq...");
-println!("cargo:rustc-env=SHARED_SECRET_KEY=8656fg...");
-```
-
-### 3. Configure build.rs  
-```rust
-// build.rs
-fn main() {
-    println!("cargo:rustc-env=TRUSTED_KEY={}", env!("TRUSTED_KEY"));
-    println!("cargo:rustc-env=SHARED_SECRET_KEY={}", env!("SHARED_SECRET_KEY"));
-}
-```
-
-### 4. Main Application Setup  
+### 2. Initialize Patcher
 ```rust
 // main.rs
 use rustpatcher::Patcher;
@@ -47,8 +24,33 @@ use rustpatcher::Patcher;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let patcher = Patcher::new()
-        .trusted_key_from_z32_str(env!("TRUSTED_KEY"))
-        .shared_secret_key_from_z32_str(env!("SHARED_SECRET_KEY"))
+        .build()
+        .await?;
+}
+```
+
+### 3. Initialize Cryptographic Identity  
+```bash
+cargo run -- rustpatcher init
+```
+**Output:**  
+```text
+New keys generated:
+  Trusted-Key = mw6iuq1iu7qd5gcz59qpjnu6tw9yn7pn4gxxkdbqwwwxfzyziuro
+  Shared-Secret = 8656fg8j6s43a4jndkzdysjuof588zezsn6s8sd6wwcpwf6b3r9y
+```
+
+### 4. Extend main with keys
+```rust
+// main.rs
+use rustpatcher::Patcher;
+
+#[rustpatcher::main]
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let patcher = Patcher::new()
+        .trusted_key_from_z32_str("mw6iuq1iu7qd5gcz59qpjnu6tw9yn7pn4gxxkdbqwwwxfzyziuro")
+        .shared_secret_key_from_z32_str("mw6iuq1iu7qd5gcz59qpjnu6tw9yn7pn4gxxkdbqwwwxfzyziuro"))
         .build()
         .await?;
 }
