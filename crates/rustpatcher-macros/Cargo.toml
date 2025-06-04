@@ -9,6 +9,7 @@ repository = "https://github.com/rustonbsd/rustpatcher"
 readme = "../../README.md"
 keywords = ["networking"]
 categories = ["network-programming"]
+
 [lib]
 proc-macro = true
 
@@ -16,4 +17,4 @@ proc-macro = true
 syn = { version = "2.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-ctor = "0.3.0"
+ctor = "0.4.2"
