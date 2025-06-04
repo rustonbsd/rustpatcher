@@ -5,24 +5,23 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min, env, ffi::CString, future::Future, io::Write, num::NonZero, pin::Pin, ptr, sync::Arc,
+    cmp::min, env, ffi::CString, future::Future, io::Write, pin::Pin, ptr, sync::Arc,
     time::Duration,
 };
 
 use anyhow::{bail, Result};
-use bytes::Bytes;
 use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
     ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
 };
 use iroh::{
-    endpoint::{Connecting, Endpoint, RecvStream, SendStream},
+    endpoint::{Connecting, Connection, Endpoint, RecvStream, SendStream},
     protocol::ProtocolHandler,
     NodeAddr, NodeId, SecretKey,
 };
 use iroh_topic_tracker::topic_tracker::TopicTracker;
 use nix::libc::{self};
-use pkarr::{dns, Keypair, PkarrClient, PublicKey, SignedPacket};
+use pkarr::{dns, Client, Keypair, PublicKey, SignedPacket};
 use rand::{rngs::OsRng, Rng};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -301,10 +300,8 @@ impl Builder {
             }
         }
 
-        if let Ok(bytes) = Vec::from_file(LAST_TRUSTED_PACKAGE).await {
-            self.trusted_packet = Some(SignedPacket::from_bytes(&Bytes::copy_from_slice(
-                bytes.as_slice(),
-            ))?);
+        if let Ok(signed_packet) = SignedPacket::from_file(LAST_TRUSTED_PACKAGE).await {
+            self.trusted_packet = Some(signed_packet);
         }
 
         // Iroh setup
@@ -870,7 +867,7 @@ impl TPatcherIroh for Patcher {
 
     async fn accept_handler(&self, conn: Connecting) -> Result<()> {
         let connection = conn.await?;
-        let remote_node_id = iroh::endpoint::get_remote_node_id(&connection)?;
+        let remote_node_id = connection.remote_node_id()?;
 
         log::debug!("accept - splitting streams");
         let (mut send, mut recv) = connection.accept_bi().await?;
@@ -958,7 +955,8 @@ impl TPatcherPkarr for Patcher {
     ) -> anyhow::Result<(VersionInfo, SignedPacket)> {
         match self.pkarr_dht_relay_switch_get(public_key).await {
             Ok(Some(pkg)) => {
-                let packet = pkg.packet();
+                let enc_packet = pkg.encoded_packet().to_vec();
+                let packet = &dns::Packet::parse(enc_packet.as_slice())?;
 
                 let version = utils::decode_rdata::<Version>(packet, "_version")?;
                 let hash = utils::decode_rdata::<[u8; PUBLIC_KEY_LENGTH]>(packet, "_hash")?;
@@ -995,6 +993,7 @@ impl TPatcherPkarr for Patcher {
         let lt = { self.inner.latest_version.lock().await.clone() };
 
         if lt.version_info().is_none() {
+            log::debug!("no version available locally");
             bail!("no version available locally")
         }
 
@@ -1003,7 +1002,7 @@ impl TPatcherPkarr for Patcher {
         let mut last_reply_id: LastReplyId = LastReplyId::from_file(LAST_REPLY_ID_NAME)
             .await
             .unwrap_or(LastReplyId(0));
-        let mut packet = dns::Packet::new_reply(last_reply_id.0);
+        let mut signed_packet = SignedPacket::builder();
 
         // Not sure if rap around will cause an error so to be safe
         last_reply_id.0 = if last_reply_id.0 >= u16::MAX - 1 {
@@ -1015,34 +1014,21 @@ impl TPatcherPkarr for Patcher {
 
         // Version
         let version = serde_json::to_string(&vi.version)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_version").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(version.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_version".try_into()?, version.as_str().try_into()?, 30);
+
         // Signature
         let signature = serde_json::to_string(&vi.signature)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_signature").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(signature.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
+
         // Hash
         let hash = serde_json::to_string(&vi.hash)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_hash").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(hash.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_hash".try_into()?, hash.as_str().try_into()?, 30);
 
-        let keypair = Keypair::from_secret_key(&self.secret_key);
-        let signed_packet = SignedPacket::from_packet(&keypair, &packet)?;
+        let key_pair = Keypair::from_secret_key(&self.secret_key);
 
+        log::debug!("publishing from {}", z32::encode(&self.public_key));
         match self
-            .pkarr_dht_relay_switch_put(&self.public_key, signed_packet)
+            .pkarr_dht_relay_switch_put(&self.public_key, signed_packet.sign(&key_pair, )?)
             .await
         {
             Ok(_) => {}
@@ -1065,7 +1051,7 @@ impl TPatcherPkarr for Patcher {
         if let Ok(resp) = req_client
             .request(
                 Method::GET,
-                format!("https://relay.pkarr.org/{}", z32::encode(public_key)),
+                format!("https://pkarr.pubky.org/{}", z32::encode(public_key)),
             )
             .send()
             .await
@@ -1084,13 +1070,13 @@ impl TPatcherPkarr for Patcher {
         }
 
         // Pkarr dht
-        if let Ok(client) = PkarrClient::builder()
-            .cache_size(NonZero::new(1).unwrap())
+        if let Ok(client) = Client::builder()
+            .cache_size(1)
             .build()
         {
             let pkarr_pk = PublicKey::try_from(public_key)?;
-            if let Ok(_signed_package) = client.resolve(&pkarr_pk) {
-                signed_package = _signed_package;
+            if let Some(_signed_package) = client.resolve(&pkarr_pk).await {
+                signed_package = Some(_signed_package);
 
                 log::debug!("PKARR GET DHT");
             }
@@ -1116,21 +1102,21 @@ impl TPatcherPkarr for Patcher {
         if let Ok(resp) = req_client
             .request(
                 Method::PUT,
-                format!("https://relay.pkarr.org/{}", z32::encode(public_key)),
+                format!("https://pkarr.pubky.org/{}", z32::encode(public_key)),
             )
             .body(packet_bytes)
             .send()
             .await
         {
-            if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT {
+            if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT || resp.status() == StatusCode::NO_CONTENT {
                 log::debug!("PKARR PUT RELAY");
                 return Ok(());
             }
         }
 
         // Pkarr dht
-        if let Ok(client) = PkarrClient::builder().build() {
-            match client.publish(&signed_packet) {
+        if let Ok(client) = Client::builder().build() {
+            match client.publish(&signed_packet,None).await {
                 Ok(_) => {
                     log::debug!("PKARR PUT DHT");
                     Ok(())
@@ -1141,6 +1127,7 @@ impl TPatcherPkarr for Patcher {
                 ),
             }
         } else {
+            log::debug!("PKARR PUT DHT FAILED");
             bail!(
                 "dht and relay failed to publish pkarr record for nodeid: {}",
                 z32::encode(public_key)
@@ -1155,7 +1142,7 @@ struct LastReplyId(u16);
 impl ProtocolHandler for Patcher {
     fn accept(
         &self,
-        conn: Connecting,
+        conn: Connection,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
         let patcher = self.clone();
 

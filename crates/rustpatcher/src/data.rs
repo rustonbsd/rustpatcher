@@ -5,7 +5,7 @@ use bytes::Bytes;
 use ed25519_dalek::{ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
 use iroh_topic_tracker::topic_tracker::{Topic, TopicTracker};
-use pkarr::{dns, Keypair, SignedPacket};
+use pkarr::{Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -184,7 +184,6 @@ impl VersionTracker {
         let mut last_reply_id: LastReplyId = LastReplyId::from_file(LAST_REPLY_ID_NAME)
             .await
             .unwrap_or(LastReplyId(0));
-        let mut packet = dns::Packet::new_reply(last_reply_id.0);
 
         // Not sure if rap around will cause an error so to be safe
         last_reply_id.0 = if last_reply_id.0 >= u16::MAX - 1 {
@@ -193,35 +192,23 @@ impl VersionTracker {
             last_reply_id.0 + 1
         };
         let _ = last_reply_id.to_file("last_reply_id").await;
+        let mut signed_packet = SignedPacket::builder();
 
         // Version
         let version = serde_json::to_string(&vi.version)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_version").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(version.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_version".try_into()?, version.as_str().try_into()?, 30);
+
         // Signature
         let signature = serde_json::to_string(&vi.signature)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_signature").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(signature.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
+
         // Hash
         let hash = serde_json::to_string(&vi.hash)?;
-        packet.answers.push(dns::ResourceRecord::new(
-            dns::Name::new("_hash").unwrap(),
-            dns::CLASS::IN,
-            30,
-            dns::rdata::RData::TXT(hash.as_str().try_into()?),
-        ));
+        signed_packet = signed_packet.txt("_hash".try_into()?, hash.as_str().try_into()?, 30);
 
         let key_pair = Keypair::from_secret_key(secret_key);
 
-        Ok(SignedPacket::from_packet(&key_pair, &packet)?)
+        Ok(signed_packet.sign(&key_pair, )?)
     }
 }
 
