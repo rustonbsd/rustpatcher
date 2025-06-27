@@ -5,7 +5,7 @@ pub mod version_embed;
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min, env, ffi::CString, future::Future, io::Write, pin::Pin, ptr, sync::Arc,
+    cmp::min, env, ffi::CString, future::Future, io::Write, ptr, sync::Arc,
     time::Duration,
 };
 
@@ -16,7 +16,7 @@ use ed25519_dalek::{
 };
 use iroh::{
     endpoint::{Connecting, Connection, Endpoint, RecvStream, SendStream},
-    protocol::ProtocolHandler,
+    protocol::{AcceptError, ProtocolHandler},
     NodeAddr, NodeId, SecretKey,
 };
 use iroh_topic_tracker::topic_tracker::TopicTracker;
@@ -358,8 +358,7 @@ impl Builder {
 
         let _router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(&patcher.ALPN(), patcher.clone())
-            .spawn()
-            .await?;
+            .spawn();
 
         Ok(patcher._spawn().await?)
     }
@@ -407,32 +406,50 @@ impl Patcher {
     }
 
     pub async fn try_update(self) -> Result<()> {
+        println!("1");
         if self.clone().update_available().await? == false {
             bail!("no update available")
         }
+        println!("1");
         let lv = self.clone().inner.latest_version.lock().await.clone();
+        println!("1");
         if lv.data().is_none() {
             bail!("no new version found in version tracker")
         }
+        println!("1");
         let data = lv.data().unwrap();
+        println!("1");
         let mut temp_file = tempfile::NamedTempFile::new()?;
+        println!("1");
         temp_file.write_all(&data)?;
+        println!("1");
         let path = temp_file.path();
+        println!("1");
 
         // Get exe path before self_replace.
         // after: it will add "[..] (deleted)"
         // to the end of the filename on ubuntu (maybe all linux).
         let exe_raw = std::env::current_exe()?;
+
+        println!("2");
         let exe = CString::new(exe_raw.to_str().unwrap())?;
+        println!("3");
 
         self_replace::self_replace(path)?;
+        println!("4");
 
         // The array must be null-terminated.
         let args: [*const libc::c_char; 1] = [ptr::null()];
+        println!(
+            "update: lv: {:?}",
+            lv.version_info().unwrap().version.to_string()
+        );
 
         unsafe {
-            libc::execv(exe.as_ptr(), args.as_ptr());
+            println!("execv: {:?}", nix::libc::execv(exe.as_ptr(), args.as_ptr()));
         }
+
+        println!("6");
         Ok(())
     }
 }
@@ -1018,7 +1035,8 @@ impl TPatcherPkarr for Patcher {
 
         // Signature
         let signature = serde_json::to_string(&vi.signature)?;
-        signed_packet = signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
+        signed_packet =
+            signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
 
         // Hash
         let hash = serde_json::to_string(&vi.hash)?;
@@ -1028,7 +1046,7 @@ impl TPatcherPkarr for Patcher {
 
         log::warn!("publishing from {}", z32::encode(&self.public_key));
         match self
-            .pkarr_dht_relay_switch_put(&self.public_key, signed_packet.sign(&key_pair, )?)
+            .pkarr_dht_relay_switch_put(&self.public_key, signed_packet.sign(&key_pair)?)
             .await
         {
             Ok(_) => {}
@@ -1070,10 +1088,7 @@ impl TPatcherPkarr for Patcher {
         }
 
         // Pkarr dht
-        if let Ok(client) = Client::builder()
-            .cache_size(1)
-            .build()
-        {
+        if let Ok(client) = Client::builder().cache_size(1).build() {
             let pkarr_pk = PublicKey::try_from(public_key)?;
             if let Some(_signed_package) = client.resolve(&pkarr_pk).await {
                 signed_package = Some(_signed_package);
@@ -1108,7 +1123,10 @@ impl TPatcherPkarr for Patcher {
             .send()
             .await
         {
-            if resp.status() == StatusCode::OK || resp.status() == StatusCode::CONFLICT || resp.status() == StatusCode::NO_CONTENT {
+            if resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::CONFLICT
+                || resp.status() == StatusCode::NO_CONTENT
+            {
                 log::warn!("PKARR PUT RELAY");
                 return Ok(());
             }
@@ -1116,7 +1134,7 @@ impl TPatcherPkarr for Patcher {
 
         // Pkarr dht
         if let Ok(client) = Client::builder().build() {
-            match client.publish(&signed_packet,None).await {
+            match client.publish(&signed_packet, None).await {
                 Ok(_) => {
                     log::warn!("PKARR PUT DHT");
                     Ok(())
@@ -1143,12 +1161,14 @@ impl ProtocolHandler for Patcher {
     fn accept(
         &self,
         conn: Connection,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
+    ) -> impl Future<Output = Result<(), AcceptError>> + Send {
         let patcher = self.clone();
 
         Box::pin(async move {
-            patcher.accept(conn).await?;
-            Ok(())
+            patcher
+                .accept(conn)
+                .await
+                .map_err(|e| iroh::protocol::AcceptError::from_err(Box::new(e)))
         })
     }
 }

@@ -1,7 +1,7 @@
 use std::{io::SeekFrom, str::FromStr, time::Duration};
 
 use anyhow::bail;
-use iroh::Endpoint;
+use iroh::{Endpoint, Watcher};
 use pkarr::dns::{self, Packet};
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
