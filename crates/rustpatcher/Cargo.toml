@@ -1,6 +1,6 @@
 [package]
 name = "rustpatcher"
-version = "0.1.13"
+version = "0.1.19"
 edition = "2021"
 authors = ["Zacharias Boehler <rustonbsd@mailfence.com>"]
 description = "p2p patching system"
@@ -12,8 +12,8 @@ categories = ["network-programming"]
 
 
 [dependencies]
-iroh = "0.34.1"
-iroh-topic-tracker = {version = "0.1.12" }
+iroh = "0.90.0"
+iroh-topic-tracker = {version = "0.1.13" }
 tokio ={ version="1",features = ["full"] }
 anyhow = "1"
 rand = "0.8.0"

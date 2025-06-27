@@ -6,10 +6,18 @@ use tokio::time::sleep;
 //#[rustpatcher::main]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!("Patcher Starting...");
     env_logger::init();
 
-    let v_string = env!("CARGO_PKG_VERSION").to_string().clone();
-
+    // if sysargs manually set version
+    let version = if env::args().len() == 2 {
+        env::args().nth(1).unwrap()
+    } else if  env::args().len() == 4 {
+        env::args().nth(3).unwrap()
+    } else {
+        env!("CARGO_PKG_VERSION").to_string().clone()
+    };
+    
     // Needed since this is an example of the same crate and not loading as a package
     // Normal: 
     //
@@ -18,7 +26,9 @@ async fn main() -> anyhow::Result<()> {
     //     // ..
     //  }
     //
-    rustpatcher::version_embed::__set_version(Box::leak(v_string.into_boxed_str()));
+    rustpatcher::version_embed::__set_version(Box::leak(version.into_boxed_str()));
+
+    println!("Version: {}", rustpatcher::version_embed::get_app_version());
 
     let patcher = Patcher::new()
         .trusted_key_from_z32_str("36nqmiugqobr5uw4j7mm8xfbfpc8pggpxnmw6k9sj7x7mtgbdr9o")
@@ -31,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         sleep(Duration::from_secs(10)).await;
         if patcher.clone().update_available().await? {
             println!("Update available");
-            println!("Updating: {:?}", patcher.clone().try_update().await?);
+            println!("Updating: {:?}", patcher.clone().try_update().await);
         }
     }
 }
