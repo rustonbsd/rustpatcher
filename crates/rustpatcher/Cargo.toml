@@ -14,7 +14,7 @@ categories = ["network-programming"]
 
 [dependencies]
 iroh = { version = "0.92", default-features = false, features = []}
-distributed-topic-tracker = "0.2"
+distributed-topic-tracker = { git = "https://github.com/rustonbsd/distributed-topic-tracker", branch="generalizing-records"}
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 rand = "0.8"
