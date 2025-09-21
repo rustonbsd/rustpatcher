@@ -48,9 +48,11 @@ impl Actor for TopicTrackerActor {
                     action(self).await
                 }
                 _ = write_ticker.tick() => {
-                    let record = self.record_publisher.new_record(unix_minute(0),vec![], vec![]);
-                    let res = self.record_publisher.publish_record(record).await;
-                    println!("published record: {:?}", res.is_ok());
+                    let record_content = [0u8; 0];
+                    if let Ok(record) = self.record_publisher.new_record(unix_minute(0),record_content) {
+                        let res = self.record_publisher.publish_record(record).await;
+                        println!("published record: {:?}", res.is_ok());
+                    }
                 }
             }
         }
