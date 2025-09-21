@@ -12,5 +12,6 @@ default-members = [
 
 [profile.release]
 panic = "abort"
-debug = true
-lto = "thin"
+debug = false
+lto = true
+opt-level = 3

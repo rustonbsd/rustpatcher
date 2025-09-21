@@ -2,15 +2,14 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use bytes::Bytes;
-use ed25519_dalek::{ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroh::{Endpoint, PublicKey};
-use iroh_topic_tracker::topic_tracker::{Topic, TopicTracker};
 use pkarr::{Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 
-use crate::{utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
+use crate::{topic_tracker::TopicTracker, utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
 
 #[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
@@ -64,15 +63,6 @@ pub struct VersionInfo {
     pub hash: [u8; 32],
     #[serde(with = "serde_z32_signature")]
     pub signature: Signature,
-}
-
-impl VersionInfo {
-    pub fn to_topic_hash(&self,shared_secret: [u8;SECRET_KEY_LENGTH]) -> anyhow::Result<Topic> {
-        let mut signing_key = SigningKey::from_bytes(&shared_secret);
-        let data = serde_json::to_string(self)?;
-        let signature = signing_key.sign(data.as_bytes());
-        Ok(Topic::from_passphrase(&z32::encode(&signature.to_bytes())))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
