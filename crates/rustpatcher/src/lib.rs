@@ -1,46 +1,45 @@
 pub mod data;
+mod topic_tracker;
 pub mod utils;
 pub mod version_embed;
 
+use distributed_topic_tracker::{RecordPublisher, RecordTopic};
 pub use rustpatcher_macros::main;
 
 use std::{
-    cmp::min, env, ffi::CString, future::Future, io::Write, ptr, sync::Arc,
+    cmp::min, env, ffi::CString, future::Future, io::Write, ptr, str::FromStr, sync::Arc,
     time::Duration,
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use data::{Auth, AuthRequest, Inner, Patcher, Protocol, Version, VersionInfo, VersionTracker};
 use ed25519_dalek::{
-    ed25519::signature::SignerMut, Signature, SigningKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, Signature, SigningKey, ed25519::signature::SignerMut,
 };
 use iroh::{
-    endpoint::{Connecting, Connection, Endpoint, RecvStream, SendStream},
-    protocol::{AcceptError, ProtocolHandler},
-    NodeAddr, NodeId, SecretKey,
+    discovery::dns::DnsDiscovery, endpoint::{Connecting, Connection, Endpoint, RecvStream, SendStream}, protocol::{AcceptError, ProtocolHandler}, NodeAddr, NodeId, SecretKey
 };
-use iroh_topic_tracker::topic_tracker::TopicTracker;
 use nix::libc::{self};
-use pkarr::{dns, Client, Keypair, PublicKey, SignedPacket};
-use rand::{rngs::OsRng, Rng};
+use pkarr::{Client, Keypair, PublicKey, SignedPacket, dns};
+use rand::{RngCore, rngs::OsRng};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{
-        mpsc::{self, Receiver},
         Mutex,
+        mpsc::{self, Receiver},
     },
     time::sleep,
 };
 use utils::{
-    compute_hash, get_app_version, Storage, LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE,
-    LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL, PUBLISHER_SIGNING_KEY_NAME,
-    PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME, SHARED_SECRET_KEY_NAME,
+    LAST_REPLY_ID_NAME, LAST_TRUSTED_PACKAGE, LATEST_VERSION_NAME, PKARR_PUBLISHING_INTERVAL,
+    PUBLISHER_SIGNING_KEY_NAME, PUBLISHER_TRUSTED_KEY_NAME, SECRET_KEY_NAME,
+    SHARED_SECRET_KEY_NAME, Storage, compute_hash, get_app_version,
 };
 
-use crate::utils::wait_for_relay;
+use crate::{topic_tracker::TopicTracker};
 
 #[derive(Debug, Clone)]
 pub struct Builder {
@@ -307,12 +306,23 @@ impl Builder {
         // Iroh setup
         let secret_key = SecretKey::from_bytes(&self.secret_key);
         let endpoint = Endpoint::builder()
-            .secret_key(secret_key)
-            .discovery_n0()
+            .secret_key(secret_key.clone())
+            .add_discovery(DnsDiscovery::n0_dns())
             .bind()
             .await?;
 
-        let topic_tracker = TopicTracker::new(&endpoint);
+        let record_topic = RecordTopic::from_str(
+            String::from_utf8(self.trusted_key.unwrap_or_default().to_vec())?.as_str(),
+        )?;
+        let record_publisher = RecordPublisher::new(
+            record_topic,
+            endpoint.node_id().public(),
+            endpoint.secret_key().secret().clone(),
+            None,
+            self.shared_secret_key.unwrap_or_default().to_vec(),
+        );
+
+        let topic_tracker = TopicTracker::new(record_publisher);
         let patcher = if self.load_latest_version_from_file {
             let latest_version = VersionTracker::from_file(LATEST_VERSION_NAME).await;
 
@@ -662,9 +672,7 @@ impl TPatcher for Patcher {
 
         // 1. Find node ids via topic tracker
         let topic_tracker = self.inner.topic_tracker.clone();
-        let node_ids = topic_tracker
-            .get_topic_nodes(&new_version_info.to_topic_hash(self.shared_secret_key)?)
-            .await?;
+        let node_ids = topic_tracker.get_node_ids().await?;
         log::warn!("update: found node_ids: {:?}", node_ids);
         for node_id in node_ids.clone() {
             // 2. try and update
@@ -743,13 +751,20 @@ impl TPatcher for Patcher {
     }
 
     async fn topic_tracker_update(self) -> Result<Vec<iroh::PublicKey>> {
+        let mut peers_with_updates = vec![];
         let lv = self.inner.latest_version.lock().await.clone();
         if let Some(vi) = lv.version_info() {
-            if let Ok(topic_hash) = vi.to_topic_hash(self.shared_secret_key) {
-                return self.inner.topic_tracker.get_topic_nodes(&topic_hash).await;
+            if let Ok(node_ids) = self.inner.topic_tracker.get_node_ids().await {
+                for node_id in node_ids {
+                    if let Ok((remote_vi, _)) = self.resolve_pkarr(node_id.as_bytes()).await {
+                        if vi.version < remote_vi.version {
+                            peers_with_updates.push(node_id.into());
+                        }
+                    }
+                }
             }
         }
-        Ok(vec![])
+        Ok(peers_with_updates)
     }
 }
 
@@ -820,7 +835,6 @@ impl TPatcherIroh for Patcher {
             }
         }
 
-        wait_for_relay(&self.inner.endpoint).await?;
         log::warn!("update: got record: {:?}", z32::encode(node_id.as_bytes()));
 
         let conn = self
@@ -901,7 +915,11 @@ impl TPatcherIroh for Patcher {
         };
 
         // 1 . Send auth request
-        let token = rand::thread_rng().gen::<[u8; 32]>();
+        let token = {
+            let mut buf = [0u8; 32];
+            OsRng.fill_bytes(&mut buf);
+            buf
+        };
         let auth_req = Protocol::AuthRequest(AuthRequest {
             sign_request: token.to_vec().into(),
         });
@@ -953,7 +971,7 @@ trait TPatcherPkarr: Sized {
     ) -> impl std::future::Future<Output = anyhow::Result<(VersionInfo, SignedPacket)>> + Send;
     fn publish_pkarr(&self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
     fn publish_trusted_pkarr(&self)
-        -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
     fn pkarr_dht_relay_switch_get(
         &self,
         public_key: &[u8; PUBLIC_KEY_LENGTH],
@@ -1158,10 +1176,7 @@ impl TPatcherPkarr for Patcher {
 struct LastReplyId(u16);
 
 impl ProtocolHandler for Patcher {
-    fn accept(
-        &self,
-        conn: Connection,
-    ) -> impl Future<Output = Result<(), AcceptError>> + Send {
+    fn accept(&self, conn: Connection) -> impl Future<Output = Result<(), AcceptError>> + Send {
         let patcher = self.clone();
 
         Box::pin(async move {

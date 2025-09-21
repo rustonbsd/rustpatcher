@@ -1,7 +1,6 @@
 use std::{io::SeekFrom, str::FromStr, time::Duration};
 
 use anyhow::bail;
-use iroh::{Endpoint, Watcher};
 use pkarr::dns::{self, Packet};
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,13 +22,6 @@ pub const LAST_REPLY_ID_NAME: &str = "last_reply_id";
 pub const LAST_TRUSTED_PACKAGE: &str = "last_trusted_package";
 
 pub const PKARR_PUBLISHING_INTERVAL: Duration = Duration::from_secs(60*60);
-
-pub async fn wait_for_relay(endpoint: &Endpoint) -> anyhow::Result<()> {
-    while endpoint.home_relay().get().is_err() {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    Ok(())
-}
 
 pub fn decode_rdata<T: DeserializeOwned + Clone>(
     packet: &Packet<'_>,
