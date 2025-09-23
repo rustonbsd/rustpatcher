@@ -2,21 +2,24 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use bytes::Bytes;
-use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH, Signature};
 use iroh::{Endpoint, PublicKey};
 use pkarr::{Keypair, SignedPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use crate::{
+    LastReplyId,
+    topic_tracker::TopicTracker,
+    utils::{LAST_REPLY_ID_NAME, Storage, compute_hash},
+};
 
-use crate::{topic_tracker::TopicTracker, utils::{compute_hash, Storage, LAST_REPLY_ID_NAME}, LastReplyId};
-
-#[derive(Debug, Clone, Serialize,Deserialize,PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
 
 impl ToString for Version {
     fn to_string(&self) -> String {
-        format!("{}.{}.{}",self.0,self.1,self.2)
+        format!("{}.{}.{}", self.0, self.1, self.2)
     }
 }
 
@@ -30,17 +33,12 @@ impl FromStr for Version {
             bail!("wrong version format")
         }
 
-        // Parse each component individually
-        let parse_component = |s: &str| -> anyhow::Result<i32> {
-            Ok(s.parse::<i32>()?)
-        };
-
-        let major = parse_component(parts[0])?;
-        let minor = parse_component(parts[1])?;
-        let patch = parse_component(parts[2])?;
+        let major = parts[0].parse::<i32>()?;
+        let minor = parts[1].parse::<i32>()?;
+        let patch = parts[2].parse::<i32>()?;
 
         Ok(Version(major, minor, patch))
-        }
+    }
 }
 
 impl Ord for Version {
@@ -104,7 +102,7 @@ impl VersionTracker {
         data: &Bytes,
         node_ids: Vec<[u8; PUBLIC_KEY_LENGTH]>,
     ) -> anyhow::Result<Self> {
-        Self::verify_data(trusted_key,version_info, data)?;
+        Self::verify_data(trusted_key, version_info, data)?;
 
         Ok(Self {
             trusted_key: trusted_key.clone(),
@@ -121,7 +119,7 @@ impl VersionTracker {
         data: &Bytes,
         node_ids: Option<Vec<[u8; PUBLIC_KEY_LENGTH]>>,
     ) -> anyhow::Result<()> {
-        Self::verify_data(&self.trusted_key,version_info, data)?;
+        Self::verify_data(&self.trusted_key, version_info, data)?;
 
         self.version_info = Some(version_info.clone());
         self.node_ids = node_ids.unwrap_or(vec![]);
@@ -147,13 +145,17 @@ impl VersionTracker {
         }
     }
 
-    pub fn verify_data(trusted_key: &[u8; PUBLIC_KEY_LENGTH], version_info: &VersionInfo, data: &Bytes) -> anyhow::Result<()> {
+    pub fn verify_data(
+        trusted_key: &[u8; PUBLIC_KEY_LENGTH],
+        version_info: &VersionInfo,
+        data: &Bytes,
+    ) -> anyhow::Result<()> {
         let pub_key = PublicKey::from_bytes(&trusted_key)?;
         let sig = version_info.signature;
 
-        log::warn!("Sig: {}",z32::encode(&sig.to_bytes()));
-        log::warn!("hash: {}",z32::encode(&compute_hash(&data)));
-        log::warn!("trusted: {}",z32::encode(trusted_key));
+        log::warn!("Sig: {}", z32::encode(&sig.to_bytes()));
+        log::warn!("hash: {}", z32::encode(&compute_hash(&data)));
+        log::warn!("trusted: {}", z32::encode(trusted_key));
 
         match pub_key.verify(&data, &sig) {
             Ok(_) => Ok(()),
@@ -161,10 +163,13 @@ impl VersionTracker {
         }
     }
 
-    pub async fn as_signed_packet(&self,secret_key: &[u8;SECRET_KEY_LENGTH]) -> anyhow::Result<SignedPacket> {
+    pub async fn as_signed_packet(
+        &self,
+        secret_key: &[u8; SECRET_KEY_LENGTH],
+    ) -> anyhow::Result<SignedPacket> {
         if self.version_info().is_none() {
             bail!("uninitialized version info")
-        } 
+        }
         if self.data().is_none() {
             bail!("uninitialized data")
         }
@@ -191,7 +196,8 @@ impl VersionTracker {
 
         // Signature
         let signature = serde_json::to_string(&vi.signature)?;
-        signed_packet = signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
+        signed_packet =
+            signed_packet.txt("_signature".try_into()?, signature.as_str().try_into()?, 30);
 
         // Hash
         let hash = serde_json::to_string(&vi.hash)?;
@@ -199,16 +205,16 @@ impl VersionTracker {
 
         let key_pair = Keypair::from_secret_key(secret_key);
 
-        Ok(signed_packet.sign(&key_pair, )?)
+        Ok(signed_packet.sign(&key_pair)?)
     }
 }
 
-#[derive(Debug,Clone,Serialize,Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthRequest {
     pub sign_request: Bytes,
 }
 
-#[derive(Debug,Clone,Serialize,Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Auth {
     pub signature: Signature,
 }
@@ -347,7 +353,7 @@ pub mod serde_z32_bytes_option {
     {
         let s = String::deserialize(deserializer)?;
         if s.len() == 0 {
-            return Ok(None)
+            return Ok(None);
         }
         let bytes = z32::decode(s.as_bytes()).map_err(|e| D::Error::custom(e.to_string()))?;
 

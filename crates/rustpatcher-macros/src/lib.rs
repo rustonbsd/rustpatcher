@@ -9,7 +9,7 @@ pub fn main(_args: TokenStream, input: TokenStream) -> TokenStream {
         // Create a static initializer that runs before main
         #[ctor::ctor]
         fn __init_version() {
-            rustpatcher::version_embed::__set_version(env!("CARGO_PKG_VERSION"));
+            rustpatcher2::embed::embed(env!("CARGO_PKG_VERSION"));
         }
 
         #input_fn

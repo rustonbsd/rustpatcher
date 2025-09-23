@@ -3,15 +3,11 @@ resolver = "2"
 members = [
     "crates/rustpatcher-macros",
     "crates/rustpatcher",
+    "crates/rustpatcher2",
 ]
 
 default-members = [
     "crates/rustpatcher-macros",
     "crates/rustpatcher",
+    "crates/rustpatcher2",
 ]
-
-[profile.release]
-panic = "abort"
-debug = false
-lto = true
-opt-level = 3
