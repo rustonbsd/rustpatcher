@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use crate::Version;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PatchInfo {
     pub version: Version,
     pub size: u64,
