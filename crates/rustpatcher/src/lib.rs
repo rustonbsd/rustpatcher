@@ -4,7 +4,7 @@ pub mod utils;
 pub mod version_embed;
 
 use distributed_topic_tracker::{RecordPublisher, RecordTopic};
-pub use rustpatcher_macros::main;
+pub use rustpatcher_macros::public_key;
 
 use std::{
     cmp::min, env, ffi::CString, future::Future, io::Write, ptr, str::FromStr, sync::Arc,

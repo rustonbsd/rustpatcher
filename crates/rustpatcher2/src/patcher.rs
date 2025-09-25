@@ -1,5 +1,4 @@
 use actor_helper::{Action, Actor, Handle};
-use ed25519_dalek::VerifyingKey;
 
 use crate::Patch;
 
@@ -14,7 +13,6 @@ pub struct Patcher {
 struct PatcherActor {
     rx: tokio::sync::mpsc::Receiver<Action<PatcherActor>>,
 
-    owner_pub_key: VerifyingKey,
     patch: Option<Patch>,
 
     // maybe intervals or notifiers and then intervals here so we can trigger a (new version update)
@@ -32,10 +30,10 @@ struct PatcherActor {
 }
 
 impl Patcher {
-    pub fn new(owner_pub_key: VerifyingKey) -> Self {
+    pub fn new() -> Self {
         let (api, rx) = Handle::channel(32);
         tokio::spawn(async move {
-            let mut actor = PatcherActor { rx, owner_pub_key, patch: None };
+            let mut actor = PatcherActor { rx, patch: None };
             if let Err(e) = actor.run().await {
                 eprintln!("Patcher actor error: {:?}", e);
             }

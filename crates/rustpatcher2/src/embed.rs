@@ -4,11 +4,23 @@ use once_cell::sync::OnceCell;
 
 use crate::{PatchInfo, Version};
 
-pub static APP_VERSION: OnceCell<&'static str> = OnceCell::new();
+#[doc(hidden)]
+static APP_VERSION: OnceCell<&'static str> = OnceCell::new();
+#[doc(hidden)]
+static OWNER_PUB_KEY: OnceCell<ed25519_dalek::VerifyingKey> = OnceCell::new();
 
 #[doc(hidden)]
 pub fn __set_version(version: &'static str) {
     let _ = APP_VERSION.set(version);
+}
+
+#[doc(hidden)]
+pub fn __set_owner_pub_key(pub_key: ed25519_dalek::VerifyingKey) {
+    let _ = OWNER_PUB_KEY.set(pub_key);
+}
+
+pub fn get_owner_pub_key() -> &'static ed25519_dalek::VerifyingKey {
+    OWNER_PUB_KEY.get().expect("Owner public key not initialized")
 }
 
 pub fn get_app_version() -> &'static str {
@@ -17,11 +29,15 @@ pub fn get_app_version() -> &'static str {
 
 // 28_bytes
 // hex: 0x1742525553545041544348455242454d42454442424f554e44534217
+#[doc(hidden)]
 pub static EMBED_BOUNDS: &[u8] = b"\x17\x42RUSTPATCHER\x42EMBED\x42BOUNDS\x42\x17";
 
+#[doc(hidden)]
 const VERSION_FIELD_LEN: usize = 16;
+#[doc(hidden)]
 const VERSION_ASCII: &str = env!("CARGO_PKG_VERSION");
 
+#[doc(hidden)]
 const fn version_field_ascii_padded(s: &str) -> [u8; VERSION_FIELD_LEN] {
     let bytes = s.as_bytes();
     let mut out = [0u8; VERSION_FIELD_LEN];
@@ -33,15 +49,21 @@ const fn version_field_ascii_padded(s: &str) -> [u8; VERSION_FIELD_LEN] {
     out
 }
 
+#[doc(hidden)]
 const VERSION_BYTES: [u8; VERSION_FIELD_LEN] = version_field_ascii_padded(VERSION_ASCII);
 
+#[doc(hidden)]
 const BIN_HASH: [u8; 32] = [0; 32];
+#[doc(hidden)]
 const BIN_SIZE: [u8; 8] = [0; 8];
+#[doc(hidden)]
 const BIN_SIG: [u8; 64] = [0; 64];
+#[doc(hidden)]
 pub const EMBED_REGION_LEN: usize =
     28 + VERSION_BYTES.len() + BIN_HASH.len() + BIN_SIZE.len() + BIN_SIG.len() + 28;
 
 // Assert sizes at compile time
+#[doc(hidden)]
 const _: () = {
     assert!(EMBED_BOUNDS.len() == 28);
     assert!(VERSION_BYTES.len() == 16);
@@ -49,6 +71,7 @@ const _: () = {
 };
 
 // Build const array without any runtime code or allocation
+#[doc(hidden)]
 #[unsafe(link_section = ".embedded_signature")]
 #[used]
 #[unsafe(no_mangle)]
@@ -123,18 +146,25 @@ pub static EMBED_REGION: [u8; EMBED_REGION_LEN] = {
     buf
 };
 
-pub fn embed(version: &'static str) {
+#[doc(hidden)]
+pub fn embed(version: &'static str, pub_key: &'static str) {
     __set_version(version);
+    __set_owner_pub_key(z32::decode(pub_key.as_bytes()).ok().and_then(|k_bytes| {
+        let key_array: [u8; 32] = k_bytes.try_into().ok()?;
+        ed25519_dalek::VerifyingKey::from_bytes(&key_array).ok()
+    }).expect("failed to decode public key"));
     unsafe {
         core::ptr::read_volatile(&EMBED_REGION as *const _);
     }
 }
 
+#[doc(hidden)]
 pub struct EmbeddedRegion {
     pub start: usize,
     pub end: usize,
 }
 
+#[doc(hidden)]
 pub fn cut_embed_section(bin_bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, Vec<u8>, EmbeddedRegion)> {
     let start = bin_bytes
         .windows(EMBED_BOUNDS.len())
@@ -153,6 +183,7 @@ pub fn cut_embed_section(bin_bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, Vec<u8>
     Ok((out, embed_region, EmbeddedRegion { start, end }))
 }
 
+#[doc(hidden)]
 pub fn get_embedded_version(embed_region_bytes: &Vec<u8>) -> anyhow::Result<Version> {
     let version_offset = EMBED_BOUNDS.len() + BIN_HASH.len() + BIN_SIZE.len() + BIN_SIG.len();
     let version_bytes =
@@ -161,6 +192,7 @@ pub fn get_embedded_version(embed_region_bytes: &Vec<u8>) -> anyhow::Result<Vers
     Version::from_str(version_str.trim_end_matches(char::from(0)).trim())
 }
 
+#[doc(hidden)]
 pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::PatchInfo> {
     let (_, embed_region_bytes, _) = cut_embed_section(bin_data.clone())?;
 
@@ -182,6 +214,7 @@ pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::Patc
     })
 }
 
+#[doc(hidden)]
 pub fn set_embedded_patch_info(bin_data: &mut Vec<u8>, patch_info: PatchInfo,embed_region_bytes: EmbeddedRegion) -> anyhow::Result<()> {
 
     let (start, end) = (embed_region_bytes.start, embed_region_bytes.end);

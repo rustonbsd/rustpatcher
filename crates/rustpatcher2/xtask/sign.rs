@@ -18,6 +18,11 @@ enum KeySource {
 enum Commands {
     /// Sign and embed a patch into a binary
     Sign(SignArgs),
+    /// generates new signing key and saves to file it prints pubkey to std out
+    Gen {
+        #[arg(value_name = "PATH", required = true)]
+        key_file: std::path::PathBuf,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -34,7 +39,29 @@ fn main() -> anyhow::Result<()> {
     let root = RootCli::parse();
     match root.cmd {
         Commands::Sign(args) => sign_cmd(args),
+        Commands::Gen { key_file } => generate_key_cmd(key_file),
+            }
+}
+
+fn generate_key_cmd(key_file: std::path::PathBuf) -> anyhow::Result<()> {
+    let signing_key = SigningKey::generate(&mut rand::thread_rng());
+    let signing_key_z32 = z32::encode(signing_key.as_bytes());
+    let signing_key_bytes = signing_key_z32.as_bytes();
+
+    if key_file.exists() {
+        println!("Key file {} already exists", key_file.display());
+        return Ok(());
     }
+
+    fs::write(&key_file, signing_key_bytes)?;
+    println!("Wrote signing key to {}", key_file.display());
+    println!("Public key (z-base-32): {}", z32::encode(signing_key.verifying_key().as_bytes()));
+    println!("\n");
+    println!("// Add the following to your main function:\n");
+    println!("[rustpatcher::public_key(\"{}\")]",z32::encode(signing_key.verifying_key().as_bytes()));
+    println!("fn main() {{\n    // your code here\n}}");
+
+    Ok(())
 }
 
 fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {

@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, ed25519::signature::SignerMut};
+use ed25519_dalek::{Signature, SigningKey, ed25519::signature::SignerMut};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use crate::Version;
@@ -26,7 +26,7 @@ impl Patch {
         &self.data
     }
 
-    pub fn verify(&self, owner_pub_key: VerifyingKey) -> anyhow::Result<()> {
+    pub fn verify(&self) -> anyhow::Result<()> {
         let (data_no_embed, _, _) = crate::embed::cut_embed_section(self.data.clone())?;
 
         let mut data_hasher = sha2::Sha512::new();
@@ -39,7 +39,7 @@ impl Patch {
         sign_hash.update((data_no_embed.len() as u64).to_le_bytes());
         let sign_hash = sign_hash.finalize();
 
-        owner_pub_key.verify_strict(&sign_hash, &self.info.signature)?;
+        crate::get_owner_pub_key().verify_strict(&sign_hash, &self.info.signature)?;
 
         if data_hash != self.info.hash {
             anyhow::bail!("data hash mismatch");
@@ -74,7 +74,7 @@ impl Patch {
         })
     }
 
-    pub fn from_self(owner_pub_key: VerifyingKey) -> anyhow::Result<Self> {
+    pub fn from_self() -> anyhow::Result<Self> {
 
         let data = std::fs::read(std::env::current_exe()?)?;
         let patch_info = crate::embed::get_embedded_patch_info(&data)?;
@@ -83,7 +83,7 @@ impl Patch {
             info: patch_info,
             data,
         };
-        patch.verify(owner_pub_key)?;
+        patch.verify()?;
         Ok(patch)
     }
 }
