@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize,PartialOrd, PartialEq, Eq)]
 pub struct Version(pub i32, pub i32, pub i32);
@@ -48,14 +49,8 @@ impl Version {
     }
 
     pub fn current() -> anyhow::Result<Self> {
-        Version::from_str(env!("CARGO_PKG_VERSION"))
-    }
-
-    pub fn to_le_bytes(&self) -> [u8; 12] {
-        let mut bytes = [0u8; 12];
-        bytes[0..4].copy_from_slice(&self.0.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.1.to_le_bytes());
-        bytes[8..12].copy_from_slice(&self.2.to_le_bytes());
-        bytes
+        let v = Version::from_str(&crate::embed::get_app_version());
+        warn!("Current version: {:?}", v);
+        v
     }
 }

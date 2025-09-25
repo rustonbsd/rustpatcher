@@ -202,6 +202,7 @@ pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::Patc
     let (sig_buf, _) = buf.split_at(BIN_SIG.len());
 
     let version = get_embedded_version(&embed_region_bytes)?;
+    println!("Embedded version: {:?}", version);
     let size = u64::from_le_bytes(size_buf.try_into().map_err(|_| anyhow::anyhow!("invalid size bytes"))?);
     let hash: [u8; 32] = hash_buf.try_into().map_err(|_| anyhow::anyhow!("invalid hash bytes"))?;
     let signature: [u8; 64] = sig_buf.try_into().map_err(|_| anyhow::anyhow!("invalid signature bytes"))?;
