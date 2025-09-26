@@ -1,10 +1,13 @@
-use std::{ffi::CString, io::Write, process, ptr};
+use std::{
+    env, ffi::{CString, OsString}, io::Write, process, ptr
+};
 
 use actor_helper::{Action, Actor, Handle};
 use chrono::Timelike;
 use distributed_topic_tracker::{RecordPublisher, unix_minute};
 use iroh::NodeId;
 use nix::libc;
+use tracing::{error, info};
 
 use crate::{Patch, PatchInfo, Version, distributor::Distributor};
 
@@ -29,6 +32,8 @@ struct UpdaterActor {
     newer_patch: Option<Patch>,
     record_publisher: RecordPublisher,
     try_update_interval: tokio::time::Interval,
+    
+    self_path_before_replace: Option<OsString>,
 }
 
 impl Updater {
@@ -39,7 +44,8 @@ impl Updater {
     ) -> Self {
         let (api, rx) = Handle::channel(32);
         tokio::spawn(async move {
-            let mut try_update_interval = tokio::time::interval(tokio::time::Duration::from_secs(56));
+            let mut try_update_interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(56));
             try_update_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut actor = UpdaterActor {
@@ -49,9 +55,10 @@ impl Updater {
                 newer_patch: None,
                 record_publisher,
                 try_update_interval,
+                self_path_before_replace: None,
             };
             if let Err(e) = actor.run().await {
-                eprintln!("Updater actor error: {:?}", e);
+                error!("Updater actor error: {:?}", e);
             }
         });
         Self { _api: api }
@@ -84,8 +91,9 @@ impl Actor for UpdaterActor {
                             UpdaterMode::At(hour, minute) => {
                                 let now = chrono::Local::now();
                                 // prob midnight rollover bug here, fine for now [!] todo
-                                if (now.hour() * 60 + now.minute()) as u8 >= (hour * 60 + minute) {
-                                    self.restart_after_update().await?;
+                                let t_offset = (now.hour() as i32 * 60 + now.minute() as i32) - (hour as i32 * 60 + minute as i32);
+                                if matches!(t_offset, 0..2) {
+                                    let _ = self.restart_after_update().await;
                                 }
                             }
                         }
@@ -99,7 +107,8 @@ impl Actor for UpdaterActor {
 impl UpdaterActor {
     async fn check_for_updates(&mut self) -> anyhow::Result<Vec<(NodeId, PatchInfo)>> {
         let now = unix_minute(0);
-        let records = self.record_publisher.get_records(now).await;
+        let mut records = self.record_publisher.get_records(now).await;
+        records.extend(self.record_publisher.get_records(now-1).await);
         let c_version = Version::current()?;
         let mut newer_patch_infos = records
             .iter()
@@ -136,30 +145,37 @@ impl UpdaterActor {
         node_id: NodeId,
         patch_info: PatchInfo,
     ) -> anyhow::Result<()> {
-        println!("Downloading patch {:?} from {:?}", patch_info, node_id);
+        info!("Downloading patch {:?} from {:?}", patch_info, node_id);
         let res = self.distributor.get_patch(node_id, patch_info).await;
-        println!("Downloaded patch: {:?}", res.is_ok());
+        info!("Downloaded patch: {:?}", res.is_ok());
         let patch = res?;
         self.newer_patch = Some(patch.clone());
+
+
+        self.self_path_before_replace = Some(env::current_exe()?.into());
 
         let mut temp_file = tempfile::NamedTempFile::new()?;
         temp_file.write_all(&patch.data())?;
         let path = temp_file.path();
 
         self_replace::self_replace(path)?;
-        println!("Updated successfully to version {:?}", patch.info().version);
+        info!("Updated successfully to version {:?}", patch.info().version);
+
+        if self.mode == UpdaterMode::Now {
+            self.restart_after_update().await?;
+        }
         Ok(())
     }
 
     async fn restart_after_update(&mut self) -> anyhow::Result<()> {
-        let exe_raw = std::env::current_exe()?;
+        let exe_raw = self.self_path_before_replace.clone().ok_or(anyhow::anyhow!("no self path stored"))?;
         let exe = CString::new(exe_raw.to_str().unwrap())?;
 
         // The array must be null-terminated.
         let args: [*const libc::c_char; 1] = [ptr::null()];
 
         unsafe {
-            println!("execv: {:?}", nix::libc::execv(exe.as_ptr(), args.as_ptr()));
+            info!("execv: {:?}", nix::libc::execv(exe.as_ptr(), args.as_ptr()));
         }
         process::exit(0);
     }

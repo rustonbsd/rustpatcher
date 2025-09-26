@@ -5,13 +5,13 @@ use distributed_topic_tracker::{RecordPublisher,RecordTopic};
 use iroh::{protocol::Router, Endpoint};
 use once_cell::sync::OnceCell;
 use sha2::Digest;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{Distributor, Publisher, Updater, UpdaterMode};
 
 static PATCHER: OnceCell<Mutex<Option<Patcher>>> = OnceCell::new();
 
-pub async fn run(update_mode: UpdaterMode) -> anyhow::Result<()> {
+pub async fn spawn(update_mode: UpdaterMode) -> anyhow::Result<()> {
     if PATCHER.get().is_none() {
         let patcher = Patcher::builder().updater_mode(update_mode).build().await?;
         let _ = PATCHER.set(Mutex::new(Some(patcher)));
@@ -131,7 +131,7 @@ impl Patcher {
                 distributor,
             };
             if let Err(e) = actor.run().await {
-                eprintln!("Patcher actor error: {:?}", e);
+                error!("Patcher actor error: {:?}", e);
             }
         });
 

@@ -13,9 +13,7 @@ async fn main() -> anyhow::Result<()> {
     println!("my version {:?} running", self_patch.info().version);
     warn!(": {:?}", self_patch.info());
 
-    rustpatcher2::run(UpdaterMode::Now).await?;
-
-    println!("my version {:?} running", rustpatcher2::Version::current()?);
+    rustpatcher2::spawn(UpdaterMode::At(13, 40)).await?;
 
     loop {
         tokio::select! {
