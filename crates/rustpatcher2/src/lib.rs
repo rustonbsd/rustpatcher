@@ -23,4 +23,4 @@ use distributor::Distributor;
 pub use rustpatcher_macros::*;
 use embed::get_owner_pub_key;
 
-pub use patcher::run;
+pub use patcher::spawn;

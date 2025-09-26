@@ -1,7 +1,7 @@
 use actor_helper::{Action, Actor, Handle, act_ok};
 use distributed_topic_tracker::{RecordPublisher, unix_minute};
 use iroh::NodeId;
-use tracing::warn;
+use tracing::{debug, error, warn};
 
 use crate::{Patch, PatchInfo, Version};
 
@@ -48,7 +48,7 @@ impl Publisher {
                 update_starter,
             };
             if let Err(e) = actor.run().await {
-                eprintln!("VersionPublisher actor error: {:?}", e);
+                error!("VersionPublisher actor error: {:?}", e);
             }
         });
         Ok(Self { api })
@@ -72,7 +72,9 @@ impl Actor for PublisherActor {
                 }
                 _ = self.interval.tick(), if matches!(self.state, PublisherState::Publishing) => {
                     let now = unix_minute(0);
-                    let records = self.record_publisher.get_records(now).await;
+                    let mut records = self.record_publisher.get_records(now).await;
+                    records.extend(self.record_publisher.get_records(now-1).await);
+
                     warn!("Checked for records, found {} records", records.len());
                     let c_version = Version::current()?;
                     let newer_patch_infos = records
@@ -93,7 +95,7 @@ impl Actor for PublisherActor {
                     warn!("Checked for updates, found {} newer versions", newer_patch_infos.len());
                     if newer_patch_infos.is_empty() {
                         let res = self.publish_self(now).await;
-                        println!("Published self: {:?}", res);
+                        debug!("Published self: {:?}", res);
                         continue;
                     }
                     self.state = PublisherState::NewerAvailable;
