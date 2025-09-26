@@ -1,9 +1,10 @@
-# Rust Patcher
-Secure decentralized software updates
-
 [![Crates.io](https://img.shields.io/crates/v/rustpatcher.svg)](https://crates.io/crates/rustpatcher)
 [![Docs.rs](https://docs.rs/rustpatcher/badge.svg)](https://docs.rs/rustpatcher)
 ![License](https://img.shields.io/badge/License-MIT-green)
+
+# Rust Patcher
+Secure fully decentralized software updates.
+
 
 ## Implementation Flow
 
