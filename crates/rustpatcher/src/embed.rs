@@ -153,6 +153,7 @@ pub fn embed(version: &'static str, pub_key: &'static str) {
         let key_array: [u8; 32] = k_bytes.try_into().ok()?;
         ed25519_dalek::VerifyingKey::from_bytes(&key_array).ok()
     }).expect("failed to decode public key"));
+    #[cfg(not(debug_assertions))]
     unsafe {
         core::ptr::read_volatile(&EMBED_REGION as *const _);
     }

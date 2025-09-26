@@ -12,9 +12,18 @@ use crate::{Distributor, Publisher, Updater, UpdaterMode};
 static PATCHER: OnceCell<Mutex<Option<Patcher>>> = OnceCell::new();
 
 pub async fn spawn(update_mode: UpdaterMode) -> anyhow::Result<()> {
+
+    #[cfg(not(debug_assertions))]
     if PATCHER.get().is_none() {
         let patcher = Patcher::builder().updater_mode(update_mode).build().await?;
         let _ = PATCHER.set(Mutex::new(Some(patcher)));
+    }
+
+    #[cfg(debug_assertions)]
+    if PATCHER.get().is_none() {
+        let _ = update_mode;
+        warn!("Skipping rustpatcher initialization in debug build");
+        let _ = PATCHER.set(Mutex::new(None));
     }
     Ok(())
 }
@@ -34,11 +43,13 @@ impl Default for Builder {
 
 impl Builder {
 
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     pub fn updater_mode(mut self, mode: UpdaterMode) -> Self {
         self.updater_mode = mode;
         self
     }
 
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     pub async fn build(self) -> anyhow::Result<Patcher> {
         let secret_key = iroh::SecretKey::generate(rand::rngs::OsRng);
         let topic_id = RecordTopic::from_str(format!(
@@ -106,6 +117,7 @@ struct PatcherActor {
 }
 
 impl Patcher {
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     pub fn builder() -> Builder {
         Builder::default()
     }

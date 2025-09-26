@@ -3,11 +3,4 @@ resolver = "2"
 members = [
     "crates/rustpatcher-macros",
     "crates/rustpatcher",
-    "crates/rustpatcher2",
-]
-
-default-members = [
-    "crates/rustpatcher-macros",
-    "crates/rustpatcher",
-    "crates/rustpatcher2",
 ]
