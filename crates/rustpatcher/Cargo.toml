@@ -28,7 +28,7 @@ tracing-subscriber = { version = "0.3", default-features=false, features = ["std
 iroh = { version = "0.92", default-features = false }
 postcard = { version = "1" }
 
-distributed-topic-tracker = { git = "https://github.com/rustonbsd/distributed-topic-tracker", rev="f4a567dad5cfde5eab6dccb3a8784f4bf3197bb9", default-features =  false }
+distributed-topic-tracker = { version="0.2.1", default-features =  false }
 
 [[example]]
 name = "platforms"
