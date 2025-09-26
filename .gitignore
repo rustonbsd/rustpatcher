@@ -27,3 +27,5 @@ Cargo.lock
 .patcher/
 .DS_Store
 .env
+
+owner_key*

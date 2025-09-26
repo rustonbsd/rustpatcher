@@ -1,19 +1,26 @@
-use rustpatcher2::UpdaterMode;
+use rustpatcher::UpdaterMode;
 use tracing::warn;
 
+#[cfg(target_os = "windows")]
+const PUBLIC_KEY: &'static str = "...windows-key...";
+#[cfg(target_os = "linux")]
+const PUBLIC_KEY: &'static str = "...linux-key...";
+#[cfg(target_os = "macos")]
+const PUBLIC_KEY: &'static str = "...macos-key...";
+
+#[rustpatcher::public_key(PUBLIC_KEY)]
 #[tokio::main]
-#[rustpatcher2::public_key("axegnqus3miex47g1kxf1j7j8spczbc57go7jgpeixq8nxjfz7gy")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_thread_ids(true)
         .init();
 
-    let self_patch = rustpatcher2::Patch::from_self()?;
+    let self_patch = rustpatcher::Patch::from_self()?;
     println!("my version {:?} running", self_patch.info().version);
     warn!(": {:?}", self_patch.info());
 
-    rustpatcher2::spawn(UpdaterMode::At(13, 40)).await?;
+    rustpatcher::spawn(UpdaterMode::At(13, 40)).await?;
 
     loop {
         tokio::select! {

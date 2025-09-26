@@ -86,11 +86,11 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;
 
     let (data_no_embed, data_embed, embed_region) =
-        rustpatcher2::embed::cut_embed_section(data.clone())?;
-    let version = rustpatcher2::embed::get_embedded_version(&data_embed)?;
+        rustpatcher::embed::cut_embed_section(data.clone())?;
+    let version = rustpatcher::embed::get_embedded_version(&data_embed)?;
 
-    let patch_info = rustpatcher2::Patch::sign(signing_key, data_no_embed, version)?;
-    rustpatcher2::embed::set_embedded_patch_info(&mut data, patch_info, embed_region)?;
+    let patch_info = rustpatcher::Patch::sign(signing_key, data_no_embed, version)?;
+    rustpatcher::embed::set_embedded_patch_info(&mut data, patch_info, embed_region)?;
 
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&data)?;
@@ -111,7 +111,6 @@ fn load_signing_key(source: KeySource) -> anyhow::Result<SigningKey> {
                 fs::write(&path, signing_key_bytes)?;
                 signing_key_bytes.to_vec()
             };
-            println!("signing_key data: {:?}", data);
 
             let sing_key_bytes = z32::decode(&data)
                 .map_err(|_| anyhow::anyhow!("failed to decode signing key from z-base-32"))?;
