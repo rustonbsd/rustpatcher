@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
 ### 3. Generate signing key (one-time)
 ```bash
 cargo install rustpatcher
-rustpatcher gen --key-file ./owner_key
+rustpatcher gen ./owner_key
 ```
 Output includes:
 - Owner signing key saved to ./owner_key (z-base-32 encoded)
