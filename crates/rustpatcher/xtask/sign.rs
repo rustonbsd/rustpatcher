@@ -1,4 +1,8 @@
-use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write}, path::PathBuf};
+use std::{
+    fs::{self, OpenOptions},
+    io::{Seek, SeekFrom, Write},
+    path::PathBuf,
+};
 
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
@@ -40,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     match root.cmd {
         Commands::Sign(args) => sign_cmd(args),
         Commands::Gen { key_file } => generate_key_cmd(key_file),
-            }
+    }
 }
 
 fn generate_key_cmd(key_file: std::path::PathBuf) -> anyhow::Result<()> {
@@ -55,10 +59,16 @@ fn generate_key_cmd(key_file: std::path::PathBuf) -> anyhow::Result<()> {
 
     fs::write(&key_file, signing_key_bytes)?;
     println!("Wrote signing key to {}", key_file.display());
-    println!("Public key (z-base-32): {}", z32::encode(signing_key.verifying_key().as_bytes()));
+    println!(
+        "Public key (z-base-32): {}",
+        z32::encode(signing_key.verifying_key().as_bytes())
+    );
     println!("\n");
     println!("// Add the following to your main function:\n");
-    println!("[rustpatcher::public_key(\"{}\")]",z32::encode(signing_key.verifying_key().as_bytes()));
+    println!(
+        "#[rustpatcher::public_key(\"{}\")]",
+        z32::encode(signing_key.verifying_key().as_bytes())
+    );
     println!("fn main() {{\n    // your code here\n}}");
 
     Ok(())
@@ -84,9 +94,16 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
 
     let mut data = fs::read(&args.binary)
         .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;
+    
+    #[cfg(target_os = "macos")]
+    let data_stripped: Vec<u8> = rustpatcher::macho::exclude_code_signature(data.as_slice())?;
+    #[cfg(target_os = "macos")]
+    let data_stripped = data_stripped.as_slice();
+    #[cfg(not(target_os = "macos"))]
+    let data_stripped = self.data.as_slice();
 
     let (data_no_embed, data_embed, embed_region) =
-        rustpatcher::embed::cut_embed_section(data.clone())?;
+        rustpatcher::embed::cut_embed_section(data_stripped)?;
     let version = rustpatcher::embed::get_embedded_version(&data_embed)?;
 
     let patch_info = rustpatcher::Patch::sign(signing_key, data_no_embed, version)?;
@@ -95,6 +112,23 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&data)?;
     file.set_len(data.len() as u64)?;
+    drop(file);
+
+    #[cfg(target_os = "macos")]
+    {
+        // re-sign the binary with codesign
+        let status = std::process::Command::new("codesign")
+            .arg("--force")
+            .arg("--sign")
+            .arg("-")
+            .arg(args.binary)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("mac os specific codesign failed"));
+        }
+    }
 
     Ok(())
 }
