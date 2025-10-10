@@ -106,9 +106,7 @@ fn to_iroh_error<E>(e: E) -> AcceptError
 where
     E: Into<IrohError>,
 {
-    AcceptError::User {
-        source: e.into(),
-    }
+    AcceptError::User { source: e.into() }
 }
 
 impl ProtocolHandler for Distributor {
@@ -134,7 +132,7 @@ impl ProtocolHandler for Distributor {
 
         let mut accept_auth = false;
         for t in -1..2 {
-            if auth_buf == auth_hash(t, &owner_pub_key)[..] {
+            if auth_buf == auth_hash(t, owner_pub_key)[..] {
                 accept_auth = true;
                 break;
             }
@@ -143,10 +141,7 @@ impl ProtocolHandler for Distributor {
         if !accept_auth {
             tx.write_u8(0).await.map_err(to_iroh_error)?;
             connection.close(VarInt::default(), b"auth failed");
-            return Err(to_iroh_error(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "auth failed",
-            )));
+            return Err(to_iroh_error(std::io::Error::other("auth failed")));
         } else {
             tx.write_u8(1).await.map_err(to_iroh_error)?;
         }

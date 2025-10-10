@@ -26,6 +26,7 @@ rand = "0.8"
 z32 = "1"
 clap = { version = "4", features = ["derive"] }
 once_cell = "1"
+goblin = "0.10"
 tempfile = "3"
 nix = { version = "0.30", features = ["process"] }
 self-replace = "1"

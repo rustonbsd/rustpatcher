@@ -1,8 +1,8 @@
 use std::{str::FromStr, sync::Mutex};
 
 use actor_helper::{Action, Actor, Handle};
-use distributed_topic_tracker::{RecordPublisher,RecordTopic};
-use iroh::{protocol::Router, Endpoint};
+use distributed_topic_tracker::{RecordPublisher, RecordTopic};
+use iroh::{Endpoint, protocol::Router};
 use once_cell::sync::OnceCell;
 use sha2::Digest;
 use tracing::{error, warn};
@@ -12,7 +12,6 @@ use crate::{Distributor, Publisher, Updater, UpdaterMode};
 static PATCHER: OnceCell<Mutex<Option<Patcher>>> = OnceCell::new();
 
 pub async fn spawn(update_mode: UpdaterMode) -> anyhow::Result<()> {
-
     #[cfg(not(debug_assertions))]
     if PATCHER.get().is_none() {
         let patcher = Patcher::builder().updater_mode(update_mode).build().await?;
@@ -42,7 +41,6 @@ impl Default for Builder {
 }
 
 impl Builder {
-
     #[cfg_attr(debug_assertions, allow(dead_code))]
     pub fn updater_mode(mut self, mode: UpdaterMode) -> Self {
         self.updater_mode = mode;
@@ -52,10 +50,13 @@ impl Builder {
     #[cfg_attr(debug_assertions, allow(dead_code))]
     pub async fn build(self) -> anyhow::Result<Patcher> {
         let secret_key = iroh::SecretKey::generate(rand::rngs::OsRng);
-        let topic_id = RecordTopic::from_str(format!(
-            "rustpatcher:{}",
-            z32::encode(crate::embed::get_owner_pub_key().as_bytes())
-        ).as_str())?;
+        let topic_id = RecordTopic::from_str(
+            format!(
+                "rustpatcher:{}",
+                z32::encode(crate::embed::get_owner_pub_key().as_bytes())
+            )
+            .as_str(),
+        )?;
         let mut hash = sha2::Sha512::new();
         hash.update(topic_id.hash());
         hash.update("v1");

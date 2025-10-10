@@ -20,7 +20,9 @@ pub fn __set_owner_pub_key(pub_key: ed25519_dalek::VerifyingKey) {
 }
 
 pub fn get_owner_pub_key() -> &'static ed25519_dalek::VerifyingKey {
-    OWNER_PUB_KEY.get().expect("Owner public key not initialized")
+    OWNER_PUB_KEY
+        .get()
+        .expect("Owner public key not initialized")
 }
 
 pub fn get_app_version() -> &'static str {
@@ -72,7 +74,10 @@ const _: () = {
 
 // Build const array without any runtime code or allocation
 #[doc(hidden)]
-#[unsafe(link_section = ".embedded_signature")]
+#[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__embsig"))]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".embsig"))]
+#[cfg_attr(target_os = "windows", unsafe(link_section = ".embsig"))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux", target_os = "windows")), unsafe(link_section = ".embsig"))]
 #[used]
 #[unsafe(no_mangle)]
 pub static EMBED_REGION: [u8; EMBED_REGION_LEN] = {
@@ -149,10 +154,15 @@ pub static EMBED_REGION: [u8; EMBED_REGION_LEN] = {
 #[doc(hidden)]
 pub fn embed(version: &'static str, pub_key: &'static str) {
     __set_version(version);
-    __set_owner_pub_key(z32::decode(pub_key.as_bytes()).ok().and_then(|k_bytes| {
-        let key_array: [u8; 32] = k_bytes.try_into().ok()?;
-        ed25519_dalek::VerifyingKey::from_bytes(&key_array).ok()
-    }).expect("failed to decode public key"));
+    __set_owner_pub_key(
+        z32::decode(pub_key.as_bytes())
+            .ok()
+            .and_then(|k_bytes| {
+                let key_array: [u8; 32] = k_bytes.try_into().ok()?;
+                ed25519_dalek::VerifyingKey::from_bytes(&key_array).ok()
+            })
+            .expect("failed to decode public key"),
+    );
     #[cfg(not(debug_assertions))]
     unsafe {
         core::ptr::read_volatile(&EMBED_REGION as *const _);
@@ -166,7 +176,7 @@ pub struct EmbeddedRegion {
 }
 
 #[doc(hidden)]
-pub fn cut_embed_section(bin_bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, Vec<u8>, EmbeddedRegion)> {
+pub fn cut_embed_section(bin_bytes: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<u8>, EmbeddedRegion)> {
     let start = bin_bytes
         .windows(EMBED_BOUNDS.len())
         .position(|window| window == EMBED_BOUNDS)
@@ -179,13 +189,13 @@ pub fn cut_embed_section(bin_bytes: Vec<u8>) -> anyhow::Result<(Vec<u8>, Vec<u8>
     if end as i128 - start as i128 != EMBED_REGION.len() as i128 {
         return Err(anyhow::anyhow!("invalid embed section size"));
     }
-    let mut out = bin_bytes;
-    let embed_region = out.drain(start..end).into_iter().collect::<Vec<_>>();
+    let mut out = bin_bytes.to_vec();
+    let embed_region = out.drain(start..end).collect::<Vec<_>>();
     Ok((out, embed_region, EmbeddedRegion { start, end }))
 }
 
 #[doc(hidden)]
-pub fn get_embedded_version(embed_region_bytes: &Vec<u8>) -> anyhow::Result<Version> {
+pub fn get_embedded_version(embed_region_bytes: &[u8]) -> anyhow::Result<Version> {
     let version_offset = EMBED_BOUNDS.len() + BIN_HASH.len() + BIN_SIZE.len() + BIN_SIG.len();
     let version_bytes =
         embed_region_bytes[version_offset..version_offset + VERSION_FIELD_LEN].to_vec();
@@ -194,8 +204,8 @@ pub fn get_embedded_version(embed_region_bytes: &Vec<u8>) -> anyhow::Result<Vers
 }
 
 #[doc(hidden)]
-pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::PatchInfo> {
-    let (_, embed_region_bytes, _) = cut_embed_section(bin_data.clone())?;
+pub fn get_embedded_patch_info(bin_data: &[u8]) -> anyhow::Result<crate::PatchInfo> {
+    let (_, embed_region_bytes, _) = cut_embed_section(bin_data)?;
 
     let (_, buf) = embed_region_bytes.split_at(EMBED_BOUNDS.len());
     let (hash_buf, buf) = buf.split_at(BIN_HASH.len());
@@ -203,9 +213,17 @@ pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::Patc
     let (sig_buf, _) = buf.split_at(BIN_SIG.len());
 
     let version = get_embedded_version(&embed_region_bytes)?;
-    let size = u64::from_le_bytes(size_buf.try_into().map_err(|_| anyhow::anyhow!("invalid size bytes"))?);
-    let hash: [u8; 32] = hash_buf.try_into().map_err(|_| anyhow::anyhow!("invalid hash bytes"))?;
-    let signature: [u8; 64] = sig_buf.try_into().map_err(|_| anyhow::anyhow!("invalid signature bytes"))?;
+    let size = u64::from_le_bytes(
+        size_buf
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid size bytes"))?,
+    );
+    let hash: [u8; 32] = hash_buf
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid hash bytes"))?;
+    let signature: [u8; 64] = sig_buf
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid signature bytes"))?;
 
     Ok(crate::PatchInfo {
         version,
@@ -216,8 +234,11 @@ pub fn get_embedded_patch_info(bin_data: &Vec<u8>) -> anyhow::Result<crate::Patc
 }
 
 #[doc(hidden)]
-pub fn set_embedded_patch_info(bin_data: &mut Vec<u8>, patch_info: PatchInfo,embed_region_bytes: EmbeddedRegion) -> anyhow::Result<()> {
-
+pub fn set_embedded_patch_info(
+    bin_data: &mut Vec<u8>,
+    patch_info: PatchInfo,
+    embed_region_bytes: EmbeddedRegion,
+) -> anyhow::Result<()> {
     let (start, end) = (embed_region_bytes.start, embed_region_bytes.end);
     if end - start != EMBED_REGION_LEN {
         return Err(anyhow::anyhow!("invalid embed region length"));
@@ -232,7 +253,9 @@ pub fn set_embedded_patch_info(bin_data: &mut Vec<u8>, patch_info: PatchInfo,emb
     region_buf.extend_from_slice(EMBED_BOUNDS);
 
     if region_buf.len() != EMBED_REGION_LEN {
-        return Err(anyhow::anyhow!("internal error: invalid embed region length"));
+        return Err(anyhow::anyhow!(
+            "internal error: invalid embed region length"
+        ));
     }
 
     bin_data.splice(start..end, region_buf.iter().cloned());
