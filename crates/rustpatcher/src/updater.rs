@@ -1,5 +1,8 @@
 use std::{
-    env, ffi::{CString, OsString}, io::Write, process, ptr
+    env,
+    ffi::{CString, OsString},
+    io::Write,
+    process, ptr,
 };
 
 use actor_helper::{Action, Actor, Handle};
@@ -32,7 +35,7 @@ struct UpdaterActor {
     newer_patch: Option<Patch>,
     record_publisher: RecordPublisher,
     try_update_interval: tokio::time::Interval,
-    
+
     self_path_before_replace: Option<OsString>,
 }
 
@@ -108,7 +111,7 @@ impl UpdaterActor {
     async fn check_for_updates(&mut self) -> anyhow::Result<Vec<(NodeId, PatchInfo)>> {
         let now = unix_minute(0);
         let mut records = self.record_publisher.get_records(now).await;
-        records.extend(self.record_publisher.get_records(now-1).await);
+        records.extend(self.record_publisher.get_records(now - 1).await);
         let c_version = Version::current()?;
         let mut newer_patch_infos = records
             .iter()
@@ -151,11 +154,10 @@ impl UpdaterActor {
         let patch = res?;
         self.newer_patch = Some(patch.clone());
 
-
         self.self_path_before_replace = Some(env::current_exe()?.into());
 
         let mut temp_file = tempfile::NamedTempFile::new()?;
-        temp_file.write_all(&patch.data())?;
+        temp_file.write_all(patch.data())?;
         let path = temp_file.path();
 
         self_replace::self_replace(path)?;
@@ -168,7 +170,10 @@ impl UpdaterActor {
     }
 
     async fn restart_after_update(&mut self) -> anyhow::Result<()> {
-        let exe_raw = self.self_path_before_replace.clone().ok_or(anyhow::anyhow!("no self path stored"))?;
+        let exe_raw = self
+            .self_path_before_replace
+            .clone()
+            .ok_or(anyhow::anyhow!("no self path stored"))?;
         let exe = CString::new(exe_raw.to_str().unwrap())?;
 
         // The array must be null-terminated.

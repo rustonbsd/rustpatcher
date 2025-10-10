@@ -13,6 +13,7 @@ Secure fully decentralized software updates.
 # Cargo.toml
 [dependencies]
 rustpatcher = "0.2"
+rustpatcher-macros = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread","macros"] }
 ```
 
