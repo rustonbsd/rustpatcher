@@ -5,6 +5,17 @@
 # Rust Patcher
 Secure fully decentralized software updates.
 
+## Supported Platforms
+
+| Platform | Architecture | Supported |
+|----------|--------------|-----------|
+| Linux    | x86_64       | Yes       |
+| Linux    | ARM64        | Yes       |
+| macOS    | x86_64       | Yes       |
+| macOS    | ARM64        | Yes       |
+| Windows  | -            | Not yet   |
+
+**Note:** windows support will follow, *windows build err: libc is not available in nix pkg*
 
 ## Implementation Flow
 
@@ -30,12 +41,9 @@ async fn main() -> anyhow::Result<()> {
     println!("my version is {:?}", rustpatcher::Version::current()?);
     
     // your app code after this
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("Exiting on Ctrl-C");
-                break;
-            }
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("Exiting on Ctrl-C");
         }
     }
     Ok(())
