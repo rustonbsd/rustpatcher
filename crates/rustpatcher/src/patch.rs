@@ -61,9 +61,20 @@ impl Patch {
 
     pub fn sign(
         owner_signing_key: SigningKey,
-        data_no_embed: Vec<u8>,
-        version: Version,
+        data: &[u8],
     ) -> anyhow::Result<PatchInfo> {
+
+        #[cfg(target_os = "macos")]
+        let data_stripped = crate::macho::exclude_code_signature(data)?;
+        #[cfg(target_os = "macos")]
+        let data_stripped = data_stripped.as_slice();
+        #[cfg(not(target_os = "macos"))]
+        let data_stripped = self.data.as_slice();
+
+        let (data_no_embed, data_embed, _) =
+        crate::embed::cut_embed_section(data_stripped)?;
+        let version = crate::embed::get_embedded_version(&data_embed)?;
+
         let mut owner_siging_key = owner_signing_key;
         let mut data_hasher = sha2::Sha512::new();
         data_hasher.update(data_no_embed.as_slice());
