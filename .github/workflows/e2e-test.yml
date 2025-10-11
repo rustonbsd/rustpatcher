@@ -1,0 +1,281 @@
+name: E2E Cross-Platform Update Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            binary_ext: ""
+            key_file: owner_key_linux
+            timeout_cmd: timeout
+          - os: macos-latest
+            platform: macos
+            binary_ext: ""
+            key_file: owner_key_macos
+            timeout_cmd: gtimeout
+          - os: windows-latest
+            platform: win
+            binary_ext: ".exe"
+            key_file: owner_key_win
+            timeout_cmd: timeout
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      # macOS specific: Install coreutils for gtimeout and verify codesign
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install coreutils
+          if ! command -v codesign &> /dev/null; then
+            echo "codesign command not found!"
+            exit 1
+          fi
+          echo "codesign is available"
+          codesign --version || true
+
+      - name: Build e2e example (initial version)
+        working-directory: crates/rustpatcher
+        run: cargo build --release --example e2e
+
+      - name: Sign initial binary
+        working-directory: crates/rustpatcher
+        run: |
+          cargo run --release --bin rustpatcher sign \
+            ../../target/release/examples/e2e${{ matrix.binary_ext }} \
+            --key-file e2e_test/keys/${{ matrix.key_file }}
+
+      - name: Save initial binary
+        run: |
+          mkdir -p old_version
+          cp target/release/examples/e2e${{ matrix.binary_ext }} old_version/e2e${{ matrix.binary_ext }}
+        shell: bash
+
+      - name: Read and bump version
+        id: version
+        working-directory: crates/rustpatcher
+        run: |
+          # Extract current version from Cargo.toml
+          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Current version: $CURRENT_VERSION"
+
+          # Parse version components
+          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+
+          # Bump patch version
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "New version: $NEW_VERSION"
+          echo "old_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Update Cargo.toml version
+        working-directory: crates/rustpatcher
+        run: |
+          # Update version in Cargo.toml
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            sed -i 's/version = "${{ steps.version.outputs.old_version }}"/version = "${{ steps.version.outputs.new_version }}"/' Cargo.toml
+          else
+            sed -i.bak 's/version = "${{ steps.version.outputs.old_version }}"/version = "${{ steps.version.outputs.new_version }}"/' Cargo.toml
+            rm -f Cargo.toml.bak
+          fi
+          echo "Updated version from ${{ steps.version.outputs.old_version }} to ${{ steps.version.outputs.new_version }}"
+          grep '^version = ' Cargo.toml
+        shell: bash
+
+      - name: Build e2e example (new version)
+        working-directory: crates/rustpatcher
+        run: cargo build --release --example e2e
+
+      - name: Sign new binary
+        working-directory: crates/rustpatcher
+        run: |
+          cargo run --release --bin rustpatcher sign \
+            ../../target/release/examples/e2e${{ matrix.binary_ext }} \
+            --key-file e2e_test/keys/${{ matrix.key_file }}
+
+      - name: Save new binary
+        run: |
+          mkdir -p new_version
+          cp target/release/examples/e2e${{ matrix.binary_ext }} new_version/e2e${{ matrix.binary_ext }}
+        shell: bash
+
+      - name: Make binaries executable
+        if: matrix.os != 'windows-latest'
+        run: |
+          chmod +x old_version/e2e
+          chmod +x new_version/e2e
+
+      - name: Run E2E test
+        timeout-minutes: 5
+        env:
+          OLD_VERSION: ${{ steps.version.outputs.old_version }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          echo "=== Starting E2E Update Test for ${{ matrix.platform }} ==="
+          echo "Testing P2P update from $OLD_VERSION to $NEW_VERSION"
+
+          # Parse version patterns
+          OLD_MAJOR=$(echo $OLD_VERSION | cut -d. -f1)
+          OLD_MINOR=$(echo $OLD_VERSION | cut -d. -f2)
+          OLD_PATCH=$(echo $OLD_VERSION | cut -d. -f3)
+          NEW_MAJOR=$(echo $NEW_VERSION | cut -d. -f1)
+          NEW_MINOR=$(echo $NEW_VERSION | cut -d. -f2)
+          NEW_PATCH=$(echo $NEW_VERSION | cut -d. -f3)
+
+          OLD_PATTERN="Version($OLD_MAJOR, $OLD_MINOR, $OLD_PATCH)"
+          NEW_PATTERN="Version($NEW_MAJOR, $NEW_MINOR, $NEW_PATCH)"
+
+          echo "Expected initial version: $OLD_PATTERN"
+          echo "Expected after update: $NEW_PATTERN"
+          echo ""
+
+          # Start the NEW version (publisher/server with the update)
+          echo "--- Starting NEW version binary (publisher) ---"
+          ./new_version/e2e${{ matrix.binary_ext }} > new_output.txt 2>&1 &
+          NEW_PID=$!
+          echo "Started new version with PID: $NEW_PID"
+          sleep 2
+
+          # Start the OLD version (client that should update itself)
+          echo "--- Starting OLD version binary (to be updated) ---"
+          ./old_version/e2e${{ matrix.binary_ext }} > old_output.txt 2>&1 &
+          OLD_PID=$!
+          echo "Started old version with PID: $OLD_PID"
+
+          # Monitor old version output for up to 120 seconds (2 minutes)
+          echo ""
+          echo "Monitoring for update... (timeout: 120 seconds)"
+          TIMEOUT=120
+          ELAPSED=0
+          UPDATE_SUCCESS=false
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            if [ -f old_output.txt ]; then
+              # Check if we see the NEW version pattern (update succeeded)
+              if grep -q "$NEW_PATTERN" old_output.txt; then
+                echo "UPDATE SUCCESSFUL! Old version updated to $NEW_PATTERN"
+                UPDATE_SUCCESS=true
+                break
+              fi
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            echo "  ... $ELAPSED seconds elapsed"
+          done
+
+          # Kill both processes
+          kill $NEW_PID $OLD_PID 2>/dev/null || true
+          sleep 1
+
+          # Show outputs
+          echo ""
+          echo "=== New version output ==="
+          cat new_output.txt || echo "No output"
+          echo ""
+          echo "=== Old version output ==="
+          cat old_output.txt || echo "No output"
+          echo ""
+
+          # Evaluate result
+          if [ "$UPDATE_SUCCESS" = true ]; then
+            echo "E2E test PASSED for ${{ matrix.platform }}!"
+            echo "The old version successfully updated itself via P2P network"
+            exit 0
+          else
+            echo "E2E test FAILED for ${{ matrix.platform }}"
+            echo "The old version did NOT update to $NEW_PATTERN within 2 minutes"
+            echo ""
+            echo "Possible issues:"
+            echo "  - P2P discovery failed"
+            echo "  - Network connectivity issues"
+            echo "  - Update mechanism not triggering"
+            echo "  - Check outputs above for errors"
+            exit 1
+          fi
+
+      # Upload artifacts for debugging
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts-${{ matrix.platform }}
+          path: |
+            old_version/
+            new_version/
+            old_output.txt
+            new_output.txt
+            old_error.txt
+            new_error.txt
+          retention-days: 7
+
+      - name: Test Summary
+        if: success()
+        run: |
+          echo "E2E update test completed successfully for ${{ matrix.platform }}"
+          echo "- Built and signed version ${{ steps.version.outputs.old_version }}"
+          echo "- Built and signed version ${{ steps.version.outputs.new_version }}"
+          echo "- Old version successfully updated itself via P2P to new version"
+          echo "- Update mechanism working correctly!"
+        shell: bash
+
+  summary:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.build-and-test.result }}" = "success" ]; then
+            echo "All E2E tests passed across all platforms!"
+          else
+            echo "Some E2E tests failed. Check the logs above."
+            exit 1
+          fi
