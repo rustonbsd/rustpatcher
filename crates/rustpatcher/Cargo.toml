@@ -1,6 +1,6 @@
 [package]
 name = "rustpatcher"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "distributed patching system for single binary applications"
 license = "MIT"
@@ -46,6 +46,10 @@ path = "examples/platforms.rs"
 [[example]]
 name = "simple"
 path = "examples/simple.rs"
+
+[[example]]
+name = "e2e"
+path = "e2e_test/e2e.rs"
 
 [[bin]]
 name = "rustpatcher"
