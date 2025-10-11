@@ -1,6 +1,6 @@
 [package]
 name = "rustpatcher"
-version = "0.2.2"
+version = "0.2.1"
 edition = "2024"
 description = "distributed patching system for single binary applications"
 license = "MIT"
