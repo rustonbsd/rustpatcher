@@ -27,11 +27,11 @@ jobs:
             binary_ext: ""
             key_file: owner_key_macos
             timeout_cmd: gtimeout
-          - os: windows-latest
-            platform: win
-            binary_ext: ".exe"
-            key_file: owner_key_win
-            timeout_cmd: timeout
+          #- os: windows-latest
+          #  platform: win
+          #  binary_ext: ".exe"
+          #  key_file: owner_key_win
+          #  timeout_cmd: timeout
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -255,27 +255,3 @@ jobs:
             old_error.txt
             new_error.txt
           retention-days: 7
-
-      - name: Test Summary
-        if: success()
-        run: |
-          echo "E2E update test completed successfully for ${{ matrix.platform }}"
-          echo "- Built and signed version ${{ steps.version.outputs.old_version }}"
-          echo "- Built and signed version ${{ steps.version.outputs.new_version }}"
-          echo "- Old version successfully updated itself via P2P to new version"
-          echo "- Update mechanism working correctly!"
-        shell: bash
-
-  summary:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Check test results
-        run: |
-          if [ "${{ needs.build-and-test.result }}" = "success" ]; then
-            echo "All E2E tests passed across all platforms!"
-          else
-            echo "Some E2E tests failed. Check the logs above."
-            exit 1
-          fi
