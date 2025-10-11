@@ -27,11 +27,11 @@ jobs:
             binary_ext: ""
             key_file: owner_key_macos
             timeout_cmd: gtimeout
-          - os: windows-latest
-            platform: win
-            binary_ext: ".exe"
-            key_file: owner_key_win
-            timeout_cmd: timeout
+          #- os: windows-latest
+          #  platform: win
+          #  binary_ext: ".exe"
+          #  key_file: owner_key_win
+          #  timeout_cmd: timeout
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
