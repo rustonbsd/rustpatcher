@@ -69,7 +69,7 @@ impl Patch {
         #[cfg(target_os = "macos")]
         let data_stripped = data_stripped.as_slice();
         #[cfg(not(target_os = "macos"))]
-        let data_stripped = self.data.as_slice();
+        let data_stripped = data;
 
         let (data_no_embed, data_embed, _) =
         crate::embed::cut_embed_section(data_stripped)?;
