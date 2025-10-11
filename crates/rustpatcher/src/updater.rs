@@ -180,8 +180,13 @@ impl UpdaterActor {
         let args: [*const libc::c_char; 1] = [ptr::null()];
 
         unsafe {
-            info!("execv: {:?}", nix::libc::execv(exe.as_ptr(), args.as_ptr()));
+            let res = nix::libc::execv(exe.as_ptr(), args.as_ptr());
+            if res != 0 {
+                let err = std::io::Error::last_os_error();
+                error!("execv failed: {:?}", err);
+                return Err(anyhow::anyhow!("execv failed: {:?}", err));
+            }
+            process::exit(0);
         }
-        process::exit(0);
     }
 }

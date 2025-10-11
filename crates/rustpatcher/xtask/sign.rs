@@ -86,6 +86,16 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
 
     let signing_key = load_signing_key(key_src)?;
 
+    // sign with codesign tool to keep the signature length etc consistent.
+    // the code signature might change in length from ld64 and codesign (at least thats my theory right now)
+    // if we first refresh the signature with the codesign tool, then compute our signautre (-codesign block at end data[..offset])
+    // this still leaves us with the signature dependent LC_CODE_SIGNATURE header but it only holds offset and size
+    // wich are constant when using the identical signature method (codesign instead of ld64 in this case).
+    // we compute our signature over the data without the codesign block (data[..offset])
+    // then we sign again with codesign after embedding our patch info.
+    #[cfg(target_os = "macos")]
+    macos_codesign(&args.binary)?;
+
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -93,20 +103,10 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
         .open(&args.binary)?;
 
     let mut data = fs::read(&args.binary)
-        .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;
-    
-    #[cfg(target_os = "macos")]
-    let data_stripped: Vec<u8> = rustpatcher::macho::exclude_code_signature(data.as_slice())?;
-    #[cfg(target_os = "macos")]
-    let data_stripped = data_stripped.as_slice();
-    #[cfg(not(target_os = "macos"))]
-    let data_stripped = self.data.as_slice();
+        .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;    
 
-    let (data_no_embed, data_embed, embed_region) =
-        rustpatcher::embed::cut_embed_section(data_stripped)?;
-    let version = rustpatcher::embed::get_embedded_version(&data_embed)?;
-
-    let patch_info = rustpatcher::Patch::sign(signing_key, data_no_embed, version)?;
+    let patch_info = rustpatcher::Patch::sign(signing_key, data.as_slice())?;
+    let (_,_,embed_region) = rustpatcher::embed::cut_embed_section(data.as_slice())?;
     rustpatcher::embed::set_embedded_patch_info(&mut data, patch_info, embed_region)?;
 
     file.seek(SeekFrom::Start(0))?;
@@ -114,22 +114,28 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
     file.set_len(data.len() as u64)?;
     drop(file);
 
+    // post sign (see comment above)
     #[cfg(target_os = "macos")]
-    {
-        // re-sign the binary with codesign
-        let status = std::process::Command::new("codesign")
-            .arg("--force")
-            .arg("--sign")
-            .arg("-")
-            .arg(args.binary)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
-        if !status.success() {
-            return Err(anyhow::anyhow!("mac os specific codesign failed"));
-        }
-    }
+    macos_codesign(&args.binary)?;
 
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codesign(binary: &PathBuf) -> anyhow::Result<()> {
+    
+    // re-sign the binary with codesign
+    let status = std::process::Command::new("codesign")
+        .arg("--force")
+        .arg("--sign")
+        .arg("-")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("mac os specific codesign failed"));
+    }
     Ok(())
 }
 
