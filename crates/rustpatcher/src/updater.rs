@@ -5,10 +5,10 @@ use std::{
     process, ptr,
 };
 
-use actor_helper::{Action, Actor, Handle};
+use actor_helper::{Action, Actor, Handle, Receiver};
 use chrono::Timelike;
 use distributed_topic_tracker::{RecordPublisher, unix_minute};
-use iroh::NodeId;
+use iroh::EndpointId;
 use nix::libc;
 use tracing::{error, info};
 
@@ -23,12 +23,12 @@ pub enum UpdaterMode {
 
 #[derive(Debug, Clone)]
 pub struct Updater {
-    _api: Handle<UpdaterActor>,
+    _api: Handle<UpdaterActor, anyhow::Error>,
 }
 
 #[derive(Debug)]
 struct UpdaterActor {
-    rx: tokio::sync::mpsc::Receiver<Action<UpdaterActor>>,
+    rx: Receiver<Action<UpdaterActor>>,
     distributor: Distributor,
 
     mode: UpdaterMode,
@@ -45,7 +45,7 @@ impl Updater {
         distributor: Distributor,
         record_publisher: RecordPublisher,
     ) -> Self {
-        let (api, rx) = Handle::channel(32);
+        let (api, rx) = Handle::channel();
         tokio::spawn(async move {
             let mut try_update_interval =
                 tokio::time::interval(tokio::time::Duration::from_secs(56));
@@ -68,11 +68,11 @@ impl Updater {
     }
 }
 
-impl Actor for UpdaterActor {
+impl Actor<anyhow::Error> for UpdaterActor {
     async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                Some(action) = self.rx.recv() => {
+                Ok(action) = self.rx.recv_async() => {
                     action(self).await
                 }
                 _ = self.try_update_interval.tick() => {
@@ -108,7 +108,7 @@ impl Actor for UpdaterActor {
 }
 
 impl UpdaterActor {
-    async fn check_for_updates(&mut self) -> anyhow::Result<Vec<(NodeId, PatchInfo)>> {
+    async fn check_for_updates(&mut self) -> anyhow::Result<Vec<(EndpointId, PatchInfo)>> {
         let now = unix_minute(0);
         let mut records = self.record_publisher.get_records(now).await;
         records.extend(self.record_publisher.get_records(now - 1).await);
@@ -117,8 +117,8 @@ impl UpdaterActor {
             .iter()
             .filter_map(|r| {
                 if let Ok(patch_info) = r.content::<PatchInfo>() {
-                    if let Ok(node_id) = NodeId::from_bytes(&r.node_id()) {
-                        Some((node_id, patch_info.clone()))
+                    if let Ok(endpoint_id) = EndpointId::from_bytes(&r.node_id()) {
+                        Some((endpoint_id, patch_info.clone()))
                     } else {
                         None
                     }
@@ -127,7 +127,7 @@ impl UpdaterActor {
                 }
             })
             .filter(|(_, p)| p.version > c_version)
-            .collect::<Vec<(NodeId, PatchInfo)>>();
+            .collect::<Vec<(EndpointId, PatchInfo)>>();
 
         if newer_patch_infos.is_empty() {
             return Ok(vec![]);
@@ -145,11 +145,11 @@ impl UpdaterActor {
 
     async fn try_download_patch(
         &mut self,
-        node_id: NodeId,
+        endpoint_id: EndpointId,
         patch_info: PatchInfo,
     ) -> anyhow::Result<()> {
-        info!("Downloading patch {:?} from {:?}", patch_info, node_id);
-        let res = self.distributor.get_patch(node_id, patch_info).await;
+        info!("Downloading patch {:?} from {:?}", patch_info, endpoint_id);
+        let res = self.distributor.get_patch(endpoint_id, patch_info).await;
         info!("Downloaded patch: {:?}", res.is_ok());
         let patch = res?;
         self.newer_patch = Some(patch.clone());
