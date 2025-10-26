@@ -77,7 +77,10 @@ const _: () = {
 #[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__embsig"))]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".embsig"))]
 #[cfg_attr(target_os = "windows", unsafe(link_section = ".embsig"))]
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux", target_os = "windows")), unsafe(link_section = ".embsig"))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux", target_os = "windows")),
+    unsafe(link_section = ".embsig")
+)]
 #[used]
 #[unsafe(no_mangle)]
 pub static EMBED_REGION: [u8; EMBED_REGION_LEN] = {

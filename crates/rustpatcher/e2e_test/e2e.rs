@@ -8,7 +8,6 @@ const PUBLIC_KEY: &str = "bhafqhm8k9e7fzab7i7h6gie6oedncwyffautkngqsa9d1ohzuho";
 #[tokio::main]
 #[rustpatcher::public_key(PUBLIC_KEY)]
 async fn main() -> anyhow::Result<()> {
-    
     rustpatcher::spawn(rustpatcher::UpdaterMode::Now).await?;
     println!("{:?}", rustpatcher::Version::current()?);
 

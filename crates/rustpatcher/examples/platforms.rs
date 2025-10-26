@@ -13,7 +13,6 @@ async fn main() -> anyhow::Result<()> {
         .with_thread_ids(true)
         .init();
 
-    
     #[cfg(not(debug_assertions))]
     {
         rustpatcher::spawn(rustpatcher::UpdaterMode::At(13, 40)).await?;
