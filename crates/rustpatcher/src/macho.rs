@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use goblin::mach::{Mach, MachO};
 
 pub fn exclude_code_signature(data: &[u8]) -> Result<Vec<u8>> {
@@ -18,7 +18,8 @@ fn exclude_from_macho(data: &[u8], macho: &MachO) -> Result<Vec<u8>> {
             if offset > data.len() {
                 return Err(anyhow!(
                     "Code signature offset out of bounds: offset={}, file_len={}",
-                    offset, data.len()
+                    offset,
+                    data.len()
                 ));
             }
 

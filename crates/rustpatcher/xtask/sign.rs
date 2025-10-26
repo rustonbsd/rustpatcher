@@ -103,10 +103,10 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
         .open(&args.binary)?;
 
     let mut data = fs::read(&args.binary)
-        .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;    
+        .map_err(|e| anyhow::anyhow!("failed to read binary {}: {}", args.binary.display(), e))?;
 
     let patch_info = rustpatcher::Patch::sign(signing_key, data.as_slice())?;
-    let (_,_,embed_region) = rustpatcher::embed::cut_embed_section(data.as_slice())?;
+    let (_, _, embed_region) = rustpatcher::embed::cut_embed_section(data.as_slice())?;
     rustpatcher::embed::set_embedded_patch_info(&mut data, patch_info, embed_region)?;
 
     file.seek(SeekFrom::Start(0))?;
@@ -123,7 +123,6 @@ fn sign_cmd(args: SignArgs) -> anyhow::Result<()> {
 
 #[cfg(target_os = "macos")]
 fn macos_codesign(binary: &PathBuf) -> anyhow::Result<()> {
-    
     // re-sign the binary with codesign
     let status = std::process::Command::new("codesign")
         .arg("--force")
