@@ -48,7 +48,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn generate_key_cmd(key_file: std::path::PathBuf) -> anyhow::Result<()> {
-    let signing_key = SigningKey::generate(&mut rand::thread_rng());
+    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_key_z32 = z32::encode(signing_key.as_bytes());
     let signing_key_bytes = signing_key_z32.as_bytes();
 
@@ -145,7 +145,7 @@ fn load_signing_key(source: KeySource) -> anyhow::Result<SigningKey> {
             let data = if let Ok(data) = fs::read(&path) {
                 data
             } else {
-                let signing_key = SigningKey::generate(&mut rand::thread_rng());
+                let signing_key = SigningKey::generate(&mut rand::rng());
                 let signing_key_z32 = z32::encode(signing_key.as_bytes());
                 let signing_key_bytes = signing_key_z32.as_bytes();
                 fs::write(&path, signing_key_bytes)?;

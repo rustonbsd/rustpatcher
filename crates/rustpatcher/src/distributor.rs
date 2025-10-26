@@ -1,7 +1,7 @@
-use actor_helper::{Action, Actor, Handle, act_ok};
+use actor_helper::{act_ok, Action, Actor, Handle, Receiver};
 use distributed_topic_tracker::unix_minute;
 use iroh::{
-    Endpoint, NodeId,
+    Endpoint, EndpointId,
     endpoint::VarInt,
     protocol::{AcceptError, ProtocolHandler},
 };
@@ -13,12 +13,12 @@ use crate::{Patch, PatchInfo};
 
 #[derive(Debug, Clone)]
 pub struct Distributor {
-    api: Handle<DistributorActor>,
+    api: Handle<DistributorActor, anyhow::Error>,
 }
 
 #[derive(Debug)]
 struct DistributorActor {
-    rx: tokio::sync::mpsc::Receiver<Action<DistributorActor>>,
+    rx: Receiver<Action<DistributorActor>>,
 
     self_patch_bytes: Vec<u8>,
     endpoint: Endpoint,
@@ -27,7 +27,7 @@ struct DistributorActor {
 impl Distributor {
     pub fn new(endpoint: Endpoint) -> anyhow::Result<Self> {
         let self_patch_bytes = postcard::to_allocvec(&Patch::from_self()?)?;
-        let (api, rx) = Handle::channel(32);
+        let (api, rx) = Handle::channel();
         tokio::spawn(async move {
             let mut actor = DistributorActor {
                 rx,
@@ -50,7 +50,7 @@ impl Distributor {
         .into_bytes()
     }
 
-    pub async fn get_patch(&self, node_id: NodeId, patch_info: PatchInfo) -> anyhow::Result<Patch> {
+    pub async fn get_patch(&self, endpoint_id: EndpointId, patch_info: PatchInfo) -> anyhow::Result<Patch> {
         let endpoint = self
             .api
             .call(act_ok!(actor => async move {
@@ -58,7 +58,7 @@ impl Distributor {
             }))
             .await?;
 
-        let conn = endpoint.connect(node_id, &Distributor::ALPN()).await?;
+        let conn = endpoint.connect(endpoint_id, &Distributor::ALPN()).await?;
         let (mut tx, mut rx) = conn.open_bi().await?;
 
         // auth: hash(owner_pub_key + unix_minute)
@@ -88,11 +88,11 @@ impl Distributor {
     }
 }
 
-impl Actor for DistributorActor {
+impl Actor<anyhow::Error> for DistributorActor {
     async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                Some(action) = self.rx.recv() => {
+                Ok(action) = self.rx.recv_async() => {
                     action(self).await
                 }
             }

@@ -1,13 +1,13 @@
-use actor_helper::{Action, Actor, Handle, act_ok};
+use actor_helper::{act_ok, Action, Actor, Handle, Receiver};
 use distributed_topic_tracker::{RecordPublisher, unix_minute};
-use iroh::NodeId;
+use iroh::EndpointId;
 use tracing::{debug, error, warn};
 
 use crate::{Patch, PatchInfo, Version};
 
 #[derive(Debug, Clone)]
 pub struct Publisher {
-    api: Handle<PublisherActor>,
+    api: Handle<PublisherActor, anyhow::Error>,
 }
 
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub enum PublisherState {
 
 #[derive(Debug)]
 struct PublisherActor {
-    rx: tokio::sync::mpsc::Receiver<Action<PublisherActor>>,
+    rx: Receiver<Action<PublisherActor>>,
     state: PublisherState,
 
     interval: tokio::time::Interval,
@@ -34,7 +34,7 @@ impl Publisher {
         update_starter: tokio::sync::mpsc::Sender<()>,
     ) -> anyhow::Result<Self> {
         let self_patch = Patch::from_self()?;
-        let (api, rx) = Handle::channel(32);
+        let (api, rx) = Handle::channel();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(55));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -63,11 +63,11 @@ impl Publisher {
     }
 }
 
-impl Actor for PublisherActor {
+impl Actor<anyhow::Error> for PublisherActor {
     async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                Some(action) = self.rx.recv() => {
+                Ok(action) = self.rx.recv_async() => {
                     action(self).await
                 }
                 _ = self.interval.tick(), if matches!(self.state, PublisherState::Publishing) => {
@@ -80,9 +80,9 @@ impl Actor for PublisherActor {
                     let newer_patch_infos = records
                         .iter()
                         .filter_map(|r| if let Ok(patch_info) = r.content::<PatchInfo>(){
-                            if let Ok(node_id) = NodeId::from_bytes(&r.node_id()) {
-                                warn!("Found patch info: {:?}{:?}", node_id,patch_info);
-                                Some((node_id,patch_info.clone()))
+                            if let Ok(endpoint_id) = EndpointId::from_bytes(&r.node_id()) {
+                                warn!("Found patch info: {:?}{:?}", endpoint_id,patch_info);
+                                Some((endpoint_id,patch_info.clone()))
                             } else {
                                 None
                             }
@@ -90,7 +90,7 @@ impl Actor for PublisherActor {
                             None
                         })
                         .filter(|(_,p)| p.version > c_version)
-                        .collect::<Vec<(NodeId, PatchInfo)>>();
+                        .collect::<Vec<(EndpointId, PatchInfo)>>();
 
                     warn!("Checked for updates, found {} newer versions", newer_patch_infos.len());
                     if newer_patch_infos.is_empty() {

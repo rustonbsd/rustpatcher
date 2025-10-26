@@ -1,7 +1,8 @@
 use std::{str::FromStr, sync::Mutex};
 
-use actor_helper::{Action, Actor, Handle};
+use actor_helper::{Action, Actor, Handle, Receiver};
 use distributed_topic_tracker::{RecordPublisher, RecordTopic};
+use ed25519_dalek::SigningKey;
 use iroh::{Endpoint, protocol::Router};
 use once_cell::sync::OnceCell;
 use sha2::Digest;
@@ -49,7 +50,9 @@ impl Builder {
 
     #[cfg_attr(debug_assertions, allow(dead_code))]
     pub async fn build(self) -> anyhow::Result<Patcher> {
-        let secret_key = iroh::SecretKey::generate(rand::rngs::OsRng);
+        let secret_key = iroh::SecretKey::generate(&mut rand::rng());
+        let signing_key = SigningKey::from_bytes(&secret_key.to_bytes());
+
         let topic_id = RecordTopic::from_str(
             format!(
                 "rustpatcher:{}",
@@ -64,8 +67,8 @@ impl Builder {
 
         let record_publisher = RecordPublisher::new(
             topic_id,
-            secret_key.public().public(),
-            secret_key.secret().clone(),
+            signing_key.verifying_key(),
+            signing_key,
             None,
             initial_secret,
         );
@@ -75,8 +78,6 @@ impl Builder {
 
         let endpoint = Endpoint::builder()
             .secret_key(secret_key.clone())
-            //.add_discovery(DnsDiscovery::n0_dns())
-            .discovery_n0()
             .bind()
             .await?;
 
@@ -99,12 +100,12 @@ impl Builder {
 
 #[derive(Debug, Clone)]
 pub struct Patcher {
-    _api: Handle<PatcherActor>,
+    _api: Handle<PatcherActor, anyhow::Error>,
 }
 
 #[derive(Debug)]
 struct PatcherActor {
-    rx: tokio::sync::mpsc::Receiver<Action<PatcherActor>>,
+    rx: Receiver<Action<PatcherActor>>,
 
     publisher: Publisher,
     updater: Option<Updater>,
@@ -131,7 +132,7 @@ impl Patcher {
         endpoint: Endpoint,
         router: Router,
     ) -> Self {
-        let (api, rx) = Handle::channel(32);
+        let (api, rx) = Handle::channel();
         tokio::spawn(async move {
             let mut actor = PatcherActor {
                 rx,
@@ -152,11 +153,11 @@ impl Patcher {
     }
 }
 
-impl Actor for PatcherActor {
+impl Actor<anyhow::Error> for PatcherActor {
     async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                Some(action) = self.rx.recv() => {
+                Ok(action) = self.rx.recv_async() => {
                     action(self).await
                 }
                 Some(_) = self.update_receiver.recv(), if self.updater.is_none() => {

@@ -1,5 +1,5 @@
 use crate::Version;
-use ed25519_dalek::{Signature, SigningKey, ed25519::signature::SignerMut};
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
@@ -75,7 +75,6 @@ impl Patch {
         crate::embed::cut_embed_section(data_stripped)?;
         let version = crate::embed::get_embedded_version(&data_embed)?;
 
-        let mut owner_siging_key = owner_signing_key;
         let mut data_hasher = sha2::Sha512::new();
         data_hasher.update(data_no_embed.as_slice());
         let data_hash = data_hasher.finalize()[..32].try_into()?;
@@ -85,7 +84,7 @@ impl Patch {
         sign_hash.update(data_hash);
         sign_hash.update((data_no_embed.len() as u64).to_le_bytes());
         let sign_hash = sign_hash.finalize();
-        let signature = owner_siging_key.sign(&sign_hash);
+        let signature = owner_signing_key.sign(&sign_hash);
 
         Ok(PatchInfo {
             version,
